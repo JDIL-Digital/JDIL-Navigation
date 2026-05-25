@@ -1,0 +1,44 @@
+// Client-side mirror of server/utils/fieldPermissions.js
+// Keep both files in sync if the role rules ever change.
+
+export const ROLE_EDITABLE_FIELDS = {
+  purchase: [
+    'mr_number', 'po_number', 'po_date', 'promised_ready_date',
+    'rig_name', 'vendor_name', 'vendor_contact_name', 'vendor_phone_number',
+    'buyer_code', 'material_description', 'material_description_2',
+    'delivery_mode', 'remarks',
+  ],
+  logistics: [
+    'dispatch_date',
+    'dc_number_bkc', 'dc_number_taloja', 'dc_number_nagothane', 'dc_number_nhava',
+    'transporter_details', 'jdil_location', 'in_transit_rig_date',
+  ],
+  rig: [
+    'delivered_to_rig_date', 'other_remarks',
+  ],
+  admin: null,  // null = all fields
+  csuite: [],   // read-only
+}
+
+const SYSTEM_FIELDS = new Set([
+  'id', 'status', 'days_elapsed', 'is_stale', 'created_by', 'updated_at',
+])
+
+export function canEditField(role, fieldKey) {
+  if (SYSTEM_FIELDS.has(fieldKey)) return false
+  const allowed = ROLE_EDITABLE_FIELDS[role]
+  if (allowed === null) return true
+  if (!allowed || allowed.length === 0) return false
+  return allowed.includes(fieldKey)
+}
+
+export function canCreatePO(role) {
+  return role === 'purchase' || role === 'admin'
+}
+
+export function hasAnyEditableField(role) {
+  if (role === 'admin') return true
+  if (role === 'csuite') return false
+  const allowed = ROLE_EDITABLE_FIELDS[role]
+  return Array.isArray(allowed) && allowed.length > 0
+}
