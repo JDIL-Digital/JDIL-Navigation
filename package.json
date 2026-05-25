@@ -1,0 +1,19 @@
+{
+  "name": "jdil-navigation",
+  "version": "1.0.0",
+  "description": "JDIL Navigation — Material Tracking System for Jindal Drilling & Industries Ltd.",
+  "private": true,
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "scripts": {
+    "postinstall": "npm install --prefix server && npm install --prefix client",
+    "build": "npm run build --prefix client",
+    "start": "node server/index.js",
+    "dev": "concurrently --names \"SERVER,CLIENT\" --prefix-colors \"cyan,green\" \"npm run dev --prefix server\" \"npm run dev --prefix client\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

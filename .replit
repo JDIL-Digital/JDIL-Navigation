@@ -1,0 +1,20 @@
+modules = ["nodejs-20"]
+run = "npm start"
+entrypoint = "server/index.js"
+hidden = [".config", "package-lock.json", "client/package-lock.json", "server/package-lock.json"]
+
+[nix]
+channel = "stable-23_11"
+
+[env]
+NODE_ENV = "production"
+
+[deployment]
+run = ["sh", "-c", "npm start"]
+build = ["sh", "-c", "npm run build"]
+deploymentTarget = "cloudrun"
+ignorePorts = false
+
+[[ports]]
+localPort = 3001
+externalPort = 80
