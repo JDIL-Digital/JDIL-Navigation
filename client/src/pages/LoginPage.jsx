@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { supabase } from '../lib/supabase'
 import JDILLogo from '../components/ui/JDILLogo'
 import OTPScreen from '../components/ui/OTPScreen'
 import { useTheme } from '../context/ThemeContext'
@@ -21,6 +22,39 @@ export default function LoginPage() {
   const [step, setStep]         = useState('form')   // 'form' | 'otp'
   const [otpLoading, setOtpLoading] = useState(false)
   const [otpError, setOtpError]     = useState('')
+
+  // ── Cross-tab login detection ─────────────────────────────────────────────
+  // While the user is on the "check your email" waiting screen, watch for the
+  // session being created in ANOTHER tab (e.g. they clicked the magic link,
+  // which logged in in a new tab). Supabase stores the session in localStorage,
+  // which syncs across same-origin tabs — so this original tab can detect it
+  // and move straight into the app.
+  useEffect(() => {
+    if (step !== 'otp') return
+
+    // Primary: onAuthStateChange fires SIGNED_IN when the token appears (incl.
+    // cross-tab via the localStorage sync that supabase-js listens to).
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session) {
+        navigate('/', { replace: true })
+      }
+    })
+
+    // Backup: raw 'storage' event — if the supabase auth token key is written
+    // by another tab, re-read the session and redirect once it's present.
+    async function onStorage(e) {
+      if (e.key && e.key.includes('-auth-token') && e.newValue) {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (session) navigate('/', { replace: true })
+      }
+    }
+    window.addEventListener('storage', onStorage)
+
+    return () => {
+      subscription.unsubscribe()
+      window.removeEventListener('storage', onStorage)
+    }
+  }, [step, navigate])
 
   // ── Step 1: verify domain + password, then send OTP ──────────────────────
   async function handleSubmit(e) {

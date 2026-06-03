@@ -1,10 +1,15 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
+import VendorAutocomplete from './VendorAutocomplete'
 import { PO_RIG_OPTIONS, BUYER_CODES, DELIVERY_MODES, OVERDUE_DAYS } from '../../utils/constants'
 import { generateMRNumber, generatePONumber, daysElapsed } from '../../utils/helpers'
 
 const DRAFT_KEY = 'jdil-new-po-draft'
+
+function emptyLineItem() {
+  return { item_name: '', material_description: '', quantity_ordered: '', unit: '' }
+}
 
 function defaultForm(profile, existingCount) {
   return {
@@ -19,7 +24,9 @@ function defaultForm(profile, existingCount) {
     buyer_code:            profile?.team_code || '',
     material_description:  '',
     material_description_2:'',
+    quantity_weight:       '',
     delivery_mode:         '',
+    line_items:            [emptyLineItem()],
   }
 }
 
@@ -54,6 +61,18 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
   const [saving, setSaving]     = useState(false)
   const [error, setError]       = useState('')
 
+  // Purchase users have a single buyer code (their team_code); admins do not.
+  const isPurchase = profile?.role === 'purchase'
+
+  // For purchase users, always force buyer_code to their own team_code —
+  // even if a restored draft carried a different/empty value.
+  useEffect(() => {
+    if (isPurchase && profile?.team_code && form.buyer_code !== profile.team_code) {
+      setForm(f => ({ ...f, buyer_code: profile.team_code }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPurchase, profile?.team_code])
+
   // Persist every keystroke to localStorage
   useEffect(() => {
     saveDraft(form)
@@ -61,6 +80,31 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
 
   function set(k, v) {
     setForm(f => ({ ...f, [k]: v }))
+  }
+
+  // ── Line item helpers ──────────────────────────────────────────────────────
+  const lineItems = Array.isArray(form.line_items) ? form.line_items : [emptyLineItem()]
+
+  function setLineItem(idx, key, val) {
+    setForm(f => {
+      const items = [...(Array.isArray(f.line_items) ? f.line_items : [emptyLineItem()])]
+      items[idx] = { ...items[idx], [key]: val }
+      return { ...f, line_items: items }
+    })
+  }
+
+  function addLineItem() {
+    setForm(f => ({
+      ...f,
+      line_items: [...(Array.isArray(f.line_items) ? f.line_items : []), emptyLineItem()],
+    }))
+  }
+
+  function removeLineItem(idx) {
+    setForm(f => {
+      const items = (Array.isArray(f.line_items) ? f.line_items : []).filter((_, i) => i !== idx)
+      return { ...f, line_items: items.length ? items : [emptyLineItem()] }
+    })
   }
 
   function handleCancel() {
@@ -75,6 +119,13 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
     if (!form.rig_name)                    { setError('Rig / Location is required.');       return }
     if (!form.vendor_name.trim())          { setError('Vendor name is required.');           return }
     if (!form.material_description.trim()) { setError('Material description is required.');  return }
+
+    // At least one line item with a name is required
+    const validItems = lineItems.filter(it => it.item_name && it.item_name.trim())
+    if (validItems.length === 0) {
+      setError('At least one line item with an item name is required.')
+      return
+    }
 
     setSaving(true)
 
@@ -91,6 +142,7 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
       buyer_code:             form.buyer_code             || null,
       material_description:   form.material_description,
       material_description_2: form.material_description_2 || null,
+      quantity_weight:        form.quantity_weight        || null,
       delivery_mode:          form.delivery_mode          || null,
       status:                 'PO Released',
       days_elapsed:           elapsed,
@@ -107,9 +159,8 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
       .select()
       .single()
 
-    setSaving(false)
-
     if (err) {
+      setSaving(false)
       console.error('Create PO error:', {
         message: err.message,
         code:    err.code,
@@ -120,7 +171,28 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
       return
     }
 
-    console.log('Create PO success:', data)
+    // ── Insert line items (quantity_pending & item_status are generated cols) ──
+    const itemRows = validItems.map(it => ({
+      po_id:                data.id,
+      item_name:            it.item_name.trim(),
+      material_description: it.material_description?.trim() || null,
+      unit:                 it.unit?.trim() || null,
+      quantity_ordered:     Number(it.quantity_ordered) || 0,
+      quantity_delivered:   0,
+    }))
+
+    const { error: itemsErr } = await supabase.from('po_line_items').insert(itemRows)
+    setSaving(false)
+
+    if (itemsErr) {
+      // PO was created but items failed — surface the error, don't clear draft
+      console.error('Create line items error:', itemsErr)
+      setError(`PO created but line items failed to save: ${itemsErr.message}. Please add them from the PO detail panel.`)
+      onCreated?.()   // refresh the list so the PO appears
+      return
+    }
+
+    console.log('Create PO success:', data, 'with', itemRows.length, 'line items')
     clearDraft()   // only clear on successful save
     onCreated?.()
     onClose()
@@ -247,15 +319,26 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
             </div>
 
             <div>
-              <label className="label">Buyer Code</label>
-              <select
-                className="input-field"
-                value={form.buyer_code}
-                onChange={e => set('buyer_code', e.target.value)}
-              >
-                <option value="">Select code…</option>
-                {BUYER_CODES.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <label className="label">
+                Buyer Code
+                {isPurchase && (
+                  <span className="ml-1.5 text-xs font-normal text-gray-400">(your code)</span>
+                )}
+              </label>
+              {isPurchase ? (
+                <div className="input-field flex items-center bg-gray-50 dark:bg-gray-800/40 text-gray-700 dark:text-gray-300 cursor-not-allowed select-none">
+                  {form.buyer_code || profile?.team_code || '—'}
+                </div>
+              ) : (
+                <select
+                  className="input-field"
+                  value={form.buyer_code}
+                  onChange={e => set('buyer_code', e.target.value)}
+                >
+                  <option value="">Select code…</option>
+                  {BUYER_CODES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              )}
             </div>
 
             {/* Spacer */}
@@ -263,11 +346,16 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
 
             <div>
               <label className="label">Vendor Name <span className="text-red-500">*</span></label>
-              <input
-                className="input-field"
+              <VendorAutocomplete
                 value={form.vendor_name}
-                onChange={e => set('vendor_name', e.target.value)}
-                placeholder="Vendor company name"
+                onChange={v => set('vendor_name', v)}
+                onSelect={vendor => setForm(f => ({
+                  ...f,
+                  vendor_name:         vendor.name,
+                  vendor_contact_name: vendor.contact_person || f.vendor_contact_name,
+                  vendor_phone_number: vendor.phone          || f.vendor_phone_number,
+                }))}
+                placeholder="Search or type vendor name"
                 required
               />
             </div>
@@ -316,6 +404,96 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
               />
             </div>
 
+            <div>
+              <label className="label">Quantity / Weight</label>
+              <input
+                className="input-field"
+                value={form.quantity_weight}
+                onChange={e => set('quantity_weight', e.target.value)}
+                placeholder="e.g. 50 pcs / 120 kg"
+              />
+            </div>
+
+          </div>
+
+          {/* ── Line Items ─────────────────────────────────────────────────── */}
+          <div className="mt-6">
+            <div className="flex items-center justify-between mb-2">
+              <label className="label mb-0">
+                Line Items <span className="text-red-500">*</span>
+                <span className="ml-1.5 text-xs font-normal text-gray-400">(at least one required)</span>
+              </label>
+              <button
+                type="button"
+                onClick={addLineItem}
+                className="text-xs font-medium text-jdil-green hover:text-green-700 flex items-center gap-1"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Add Item
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {lineItems.map((it, idx) => (
+                <div
+                  key={idx}
+                  className="grid grid-cols-12 gap-2 items-start bg-gray-50 dark:bg-gray-800/40 rounded-lg p-2.5 border border-gray-200 dark:border-gray-700"
+                >
+                  <div className="col-span-12 sm:col-span-4">
+                    <input
+                      className="input-field text-sm"
+                      value={it.item_name}
+                      onChange={e => setLineItem(idx, 'item_name', e.target.value)}
+                      placeholder="Item name *"
+                    />
+                  </div>
+                  <div className="col-span-12 sm:col-span-4">
+                    <input
+                      className="input-field text-sm"
+                      value={it.material_description}
+                      onChange={e => setLineItem(idx, 'material_description', e.target.value)}
+                      placeholder="Material description"
+                    />
+                  </div>
+                  <div className="col-span-5 sm:col-span-2">
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      className="input-field text-sm"
+                      value={it.quantity_ordered}
+                      onChange={e => setLineItem(idx, 'quantity_ordered', e.target.value)}
+                      placeholder="Qty"
+                    />
+                  </div>
+                  <div className="col-span-5 sm:col-span-1">
+                    <input
+                      className="input-field text-sm"
+                      value={it.unit}
+                      onChange={e => setLineItem(idx, 'unit', e.target.value)}
+                      placeholder="Unit"
+                    />
+                  </div>
+                  <div className="col-span-2 sm:col-span-1 flex justify-center pt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => removeLineItem(idx)}
+                      className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+                      title="Remove item"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1.5">
+              Item name & quantity ordered. Delivery quantities are tracked by the rig team after dispatch.
+            </p>
           </div>
 
           {error && (

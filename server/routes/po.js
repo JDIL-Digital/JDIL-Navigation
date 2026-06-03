@@ -7,6 +7,7 @@ const {
   sendEmail,
   newPOEmail,
   statusChangedEmail,
+  partialDeliveryEmail,
 } = require('../utils/email')
 
 const OVERDUE_DAYS = 45
@@ -87,35 +88,40 @@ router.post('/', requireAuth, async (req, res) => {
   const { data, error } = await supabase.from('po_orders').insert(body).select().single()
   if (error) return res.status(400).json({ error: error.message })
 
-  // ── In-app notifications (admin + csuite) ─────────────────────────────────
-  try {
-    const { data: targets } = await supabase
-      .from('users').select('id').in('role', ['admin', 'csuite']).eq('is_active', true)
-    if (targets?.length) {
-      await supabase.from('notifications').insert(targets.map(u => ({
-        user_id: u.id, type: 'new_po',
-        title:   `New PO Created: ${data.po_number}`,
-        message: `${data.po_number} for ${data.rig_name} — ${data.vendor_name}`,
-        is_read: false, created_at: new Date().toISOString(),
-      })))
-    }
-  } catch (e) { console.error('[notify] in-app error:', e) }
+  // ✅ Respond to the client IMMEDIATELY — notifications run afterwards and
+  //    must never crash the handler or block the response.
+  res.json({ success: true, data })
 
-  // ── Email: notify all logistics users of the new PO ───────────────────────
-  try {
-    const logisticsEmails = await getEmailsByRole('logistics')
-    if (logisticsEmails.length) {
-      const createdByName = req.user.name || req.user.email || 'System'
-      await sendEmail({
-        to:      logisticsEmails,
-        subject: `New PO Created — ${data.po_number} — ${data.rig_name}`,
-        html:    newPOEmail(data, createdByName),
-      })
-      console.log(`[email] New PO ${data.po_number} → ${logisticsEmails.length} logistics users`)
-    }
-  } catch (e) { console.error('[email] new PO notification error:', e) }
+  // ── Fire-and-forget: in-app notifications + new-PO email ───────────────────
+  ;(async () => {
+    // In-app notifications (admin + csuite)
+    try {
+      const { data: targets } = await supabase
+        .from('users').select('id').in('role', ['admin', 'csuite']).eq('is_active', true)
+      if (targets?.length) {
+        await supabase.from('notifications').insert(targets.map(u => ({
+          user_id: u.id, type: 'new_po',
+          title:   `New PO Created: ${data.po_number}`,
+          message: `${data.po_number} for ${data.rig_name} — ${data.vendor_name}`,
+          is_read: false, created_at: new Date().toISOString(),
+        })))
+      }
+    } catch (e) { console.error('[notify] in-app error:', e) }
 
-  res.json(data)
+    // Email: notify all logistics users of the new PO
+    try {
+      const logisticsEmails = await getEmailsByRole('logistics')
+      if (logisticsEmails.length) {
+        const createdByName = req.user.name || req.user.email || 'System'
+        await sendEmail({
+          to:      logisticsEmails,
+          subject: `New PO Created — ${data.po_number} — ${data.rig_name}`,
+          html:    newPOEmail(data, createdByName),
+        })
+        console.log(`[email] New PO ${data.po_number} → ${logisticsEmails.length} logistics users`)
+      }
+    } catch (e) { console.error('[email] new PO notification error:', e) }
+  })().catch(e => console.error('[po POST] notification dispatch error (non-fatal):', e))
 })
 
 // ─── UPDATE PO ──────────────────────────────────────────────────────────────
@@ -152,7 +158,17 @@ router.patch('/:id', requireAuth, async (req, res) => {
   // Fetch the current record so we can merge and recalculate status
   const { data: current, error: fetchErr } = await supabase
     .from('po_orders').select('*').eq('id', req.params.id).single()
-  if (fetchErr) return res.status(404).json({ error: 'PO not found' })
+  if (fetchErr) {
+    console.error('[po PATCH] fetch error for id', req.params.id, ':', fetchErr)
+    // PGRST116 = "JSON object requested, multiple (or no) rows returned" → genuine not-found
+    const status = fetchErr.code === 'PGRST116' ? 404 : 500
+    return res.status(status).json({
+      error: status === 404
+        ? 'PO not found — the record may not exist or the ID is invalid'
+        : `Database error: ${fetchErr.message}`,
+      code: fetchErr.code,
+    })
+  }
 
   const merged     = { ...current, ...sanitised }
   const newStatus  = calcStatus(merged)
@@ -182,10 +198,20 @@ router.patch('/:id', requireAuth, async (req, res) => {
       reason,
       changed_at:    new Date().toISOString(),
     }))
-    await supabase.from('audit_log').insert(logs).catch(e => console.error('[audit] log error:', e))
+    try {
+      await supabase.from('audit_log').insert(logs)
+    } catch (e) { console.error('[audit] log error:', e) }
   }
 
-  // ── In-app + email notifications on status change ──────────────────────────
+  // ✅ Respond to the client IMMEDIATELY — before any email work.
+  //    A mail failure must never crash the handler or leave the request
+  //    hanging (which surfaced as "Unexpected end of JSON input" on the client).
+  res.json({ success: true, data })
+
+  // ── Fire-and-forget: in-app + email notifications ──────────────────────────
+  //    Runs AFTER the response is sent. Wrapped in an async IIFE with a top-level
+  //    .catch so nothing here can crash the process or affect the API response.
+  ;(async () => {
   if (oldStatus !== newStatus) {
     const updatedByName = req.user.name || req.user.email || 'System'
 
@@ -252,8 +278,133 @@ router.patch('/:id', requireAuth, async (req, res) => {
       } catch (e) { console.error('[email] logistics internal status email error:', e) }
     }
   }
+  })().catch(e => console.error('[po PATCH] notification dispatch error (non-fatal):', e))
+})
 
-  res.json(data)
+// ═══════════════════════════════════════════════════════════════════════════════
+//  LINE ITEMS
+//  Pipeline status stays PER-PO; these endpoints only track item quantities.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── GET /api/po/:id/items — list line items for a PO ─────────────────────────
+router.get('/:id/items', requireAuth, async (req, res) => {
+  const { data, error } = await supabase
+    .from('po_line_items')
+    .select('*')
+    .eq('po_id', req.params.id)
+    .order('created_at', { ascending: true })
+  if (error) return res.status(500).json({ error: error.message })
+  res.json(data || [])
+})
+
+// ─── POST /api/po/:id/items — add line items (purchase + admin) ───────────────
+// Body: { items: [{ item_name, material_description, unit, quantity_ordered }, ...] }
+router.post('/:id/items', requireAuth, async (req, res) => {
+  if (!['purchase', 'admin'].includes(req.user.role)) {
+    return res.status(403).json({ error: `Your role (${req.user.role}) cannot add line items` })
+  }
+
+  const items = Array.isArray(req.body.items) ? req.body.items : []
+  if (items.length === 0) {
+    return res.status(400).json({ error: 'No line items provided' })
+  }
+
+  // Sanitise — only accept mutable fields; never generated columns
+  const rows = items
+    .filter(it => it && it.item_name && String(it.item_name).trim())
+    .map(it => ({
+      po_id:                req.params.id,
+      item_name:            String(it.item_name).trim(),
+      material_description: it.material_description ? String(it.material_description).trim() : null,
+      unit:                 it.unit ? String(it.unit).trim() : null,
+      quantity_ordered:     Number(it.quantity_ordered) || 0,
+      quantity_delivered:   0,
+      remarks:              it.remarks ? String(it.remarks).trim() : null,
+    }))
+
+  if (rows.length === 0) {
+    return res.status(400).json({ error: 'Every line item needs an item name' })
+  }
+
+  const { data, error } = await supabase.from('po_line_items').insert(rows).select()
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ success: true, data })
+})
+
+// ─── PATCH /api/po/items/:itemId — update delivered quantity (rig + admin) ────
+// Body: { quantity_delivered: number, remarks?: string }
+router.patch('/items/:itemId', requireAuth, async (req, res) => {
+  if (!['rig', 'admin'].includes(req.user.role)) {
+    return res.status(403).json({ error: `Your role (${req.user.role}) cannot update delivery quantities` })
+  }
+
+  const qty = Number(req.body.quantity_delivered)
+  if (Number.isNaN(qty) || qty < 0) {
+    return res.status(400).json({ error: 'quantity_delivered must be a non-negative number' })
+  }
+
+  // Fetch current item to validate against ordered qty and detect partial delivery
+  const { data: item, error: fetchErr } = await supabase
+    .from('po_line_items').select('*').eq('id', req.params.itemId).single()
+  if (fetchErr) {
+    const status = fetchErr.code === 'PGRST116' ? 404 : 500
+    return res.status(status).json({
+      error: status === 404 ? 'Line item not found' : `Database error: ${fetchErr.message}`,
+      code: fetchErr.code,
+    })
+  }
+
+  const ordered = Number(item.quantity_ordered) || 0
+  if (qty > ordered) {
+    return res.status(400).json({ error: `Delivered quantity (${qty}) cannot exceed ordered quantity (${ordered})` })
+  }
+
+  // Rig users may only update items for their own rig
+  if (req.user.role === 'rig' && req.user.rig_name) {
+    const { data: parentPO } = await supabase
+      .from('po_orders').select('rig_name').eq('id', item.po_id).single()
+    if (parentPO && parentPO.rig_name !== req.user.rig_name) {
+      return res.status(403).json({ error: 'You can only update line items for your assigned rig' })
+    }
+  }
+
+  const patch = { quantity_delivered: qty, updated_at: new Date().toISOString() }
+  if (req.body.remarks !== undefined) patch.remarks = req.body.remarks || null
+
+  const { data: updated, error } = await supabase
+    .from('po_line_items').update(patch).eq('id', req.params.itemId).select().single()
+  if (error) return res.status(400).json({ error: error.message })
+
+  // ✅ Respond immediately — email is fire-and-forget below
+  res.json({ success: true, data: updated })
+
+  // ── Fire-and-forget: partial-delivery alert ────────────────────────────────
+  const isPartial = qty > 0 && qty < ordered
+  if (isPartial) {
+    ;(async () => {
+      try {
+        const { data: po } = await supabase
+          .from('po_orders').select('*').eq('id', updated.po_id).single()
+        if (!po) return
+
+        // Rig managers for this rig + all purchase users
+        const rigEmails      = await getEmailsByRole('rig', po.rig_name)
+        const purchaseEmails = await getEmailsByRole('purchase')
+        const recipients     = [...new Set([...rigEmails, ...purchaseEmails])]
+
+        if (recipients.length) {
+          await sendEmail({
+            to:      recipients,
+            subject: `Partial Delivery — ${po.po_number || po.mr_number} — ${updated.item_name}`,
+            html:    partialDeliveryEmail(po, updated),
+          })
+          console.log(`[email] Partial delivery for ${po.po_number} item "${updated.item_name}" → ${recipients.length} recipients`)
+        }
+      } catch (e) {
+        console.error('[po items PATCH] partial-delivery email error (non-fatal):', e)
+      }
+    })().catch(e => console.error('[po items PATCH] dispatch error (non-fatal):', e))
+  }
 })
 
 module.exports = router

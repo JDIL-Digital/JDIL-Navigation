@@ -35,6 +35,8 @@ export const LOGISTICS_CODES = [
 
 export const DELIVERY_MODES = ['Vendor Delivery', 'JDIL Pickup']
 
+export const TRANSPORT_MODES = ['Road', 'Air', 'Sea', 'Courier']
+
 export const ROLES = ['purchase', 'logistics', 'rig', 'admin', 'csuite']
 
 export const PO_STATUSES = [

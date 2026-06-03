@@ -5,6 +5,7 @@ import NotificationsPanel from './NotificationsPanel'
 import { useNotifications } from '../../context/NotificationContext'
 import { useAuth } from '../../context/AuthContext'
 import jindalLogo from '../../assets/Jindal_Logo.jpg'
+import ChatbotWidget from '../ui/ChatbotWidget'
 
 // Bottom-nav items — mirrors the sidebar's role-based filter
 const BOTTOM_NAV = [
@@ -148,6 +149,9 @@ export default function Layout() {
       </nav>
 
       <NotificationsPanel open={notifOpen} onClose={() => setNotifOpen(false)} />
+
+      {/* Floating help assistant — every page, after login */}
+      <ChatbotWidget />
     </div>
   )
 }

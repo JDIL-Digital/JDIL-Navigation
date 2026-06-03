@@ -2,10 +2,22 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { calcStatus, daysElapsed, formatDate } from '../../utils/helpers'
-import { PO_RIG_OPTIONS, BUYER_CODES, DELIVERY_MODES, OVERDUE_DAYS } from '../../utils/constants'
+import { PO_RIG_OPTIONS, BUYER_CODES, DELIVERY_MODES, TRANSPORT_MODES, OVERDUE_DAYS } from '../../utils/constants'
 import { canEditField, hasAnyEditableField } from '../../utils/fieldPermissions'
 import { StatusPill, PipelineDots } from './StatusPill'
 import { generateSinglePOReport } from '../../utils/pdfReports'
+import VendorAutocomplete from './VendorAutocomplete'
+
+// ─── DC field → logistics team code mapping (Issue 6) ─────────────────────────
+const DC_TEAM_MAP = {
+  'SV-01': 'dc_number_bkc',
+  'SS-02': 'dc_number_bkc',
+  'AK-03': 'dc_number_taloja',
+  'KT-04': 'dc_number_taloja',
+  'MK-05': 'dc_number_nhava',
+  'RS-06': 'dc_number_nagothane',
+}
+const DC_FIELDS = new Set(['dc_number_bkc', 'dc_number_taloja', 'dc_number_nhava', 'dc_number_nagothane'])
 
 // ─── Field section definitions (display grouping only, not permissions) ───────
 const FIELD_SECTIONS = [
@@ -24,6 +36,7 @@ const FIELD_SECTIONS = [
       { key: 'buyer_code',            label: 'Buyer Code',             type: 'select', options: BUYER_CODES },
       { key: 'material_description',  label: 'Material Description',   type: 'textarea' },
       { key: 'material_description_2',label: 'Material Description 2', type: 'textarea' },
+      { key: 'quantity_weight',       label: 'Quantity / Weight',      type: 'text' },
       { key: 'delivery_mode',         label: 'Delivery Mode',          type: 'select', options: DELIVERY_MODES },
     ],
   },
@@ -31,16 +44,22 @@ const FIELD_SECTIONS = [
     key: 'logistics',
     label: 'Logistics Details',
     fields: [
-      { key: 'vendor_confirmed_date', label: 'Vendor Confirmed Date',  type: 'date' },
-      { key: 'material_ready_date',   label: 'Material Ready Date',    type: 'date' },
-      { key: 'dispatch_date',         label: 'Dispatch Date',          type: 'date' },
-      { key: 'dc_number_bkc',         label: 'DC Number (BKC)',        type: 'text' },
-      { key: 'dc_number_taloja',      label: 'DC Number (Taloja)',     type: 'text' },
-      { key: 'dc_number_nagothane',   label: 'DC Number (Nagothane)',  type: 'text' },
-      { key: 'dc_number_nhava',       label: 'DC Number (Nhava)',      type: 'text' },
-      { key: 'transporter_details',   label: 'Transporter Details',    type: 'text' },
-      { key: 'jdil_location',         label: 'JDIL Location',          type: 'text' },
-      { key: 'in_transit_rig_date',   label: 'In Transit to Rig Date', type: 'date' },
+      // Issue 3: "Material Collection Date" → DATE, stored in vendor_confirmed_date column
+      { key: 'vendor_confirmed_date',        label: 'Material Collection Date',     type: 'date' },
+      // Issue 3: "Material Collection Location" → TEXT, stored in dedicated material_collection_location column
+      { key: 'material_collection_location', label: 'Material Collection Location', type: 'text' },
+      { key: 'dispatch_date',                label: 'Dispatch Date',                type: 'date' },
+      // Issue 6: DC fields — filtered per team_code in render (see showField())
+      { key: 'dc_number_bkc',               label: 'DC Number (BKC)',              type: 'text' },
+      { key: 'dc_number_taloja',            label: 'DC Number (Taloja)',           type: 'text' },
+      { key: 'dc_number_nagothane',         label: 'DC Number (Nagothane)',        type: 'text' },
+      { key: 'dc_number_nhava',             label: 'DC Number (Nhava)',            type: 'text' },
+      // Issue 5: new logistics fields
+      { key: 'mode_of_transport',           label: 'Mode of Transport',            type: 'select', options: TRANSPORT_MODES },
+      // Issue 5: renamed label
+      { key: 'transporter_details',         label: 'Transporter Detail',           type: 'text' },
+      { key: 'jdil_location',               label: 'JDIL Location',               type: 'text' },
+      { key: 'in_transit_rig_date',         label: 'In Transit to Rig Date',      type: 'date' },
     ],
   },
   {
@@ -85,6 +104,20 @@ function ReadOnlyField({ label, value, wide }) {
   )
 }
 
+// ─── Line item status pill ─────────────────────────────────────────────────────
+function ItemStatusPill({ status }) {
+  const styles = {
+    'Pending':             'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300',
+    'Partially Delivered': 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+    'Fully Delivered':     'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
+  }
+  return (
+    <span className={`inline-block text-xs font-medium rounded-full px-2 py-0.5 whitespace-nowrap ${styles[status] || styles['Pending']}`}>
+      {status || 'Pending'}
+    </span>
+  )
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function PODetailPanel({ po, onClose, onSave }) {
   const { profile } = useAuth()
@@ -96,7 +129,30 @@ export default function PODetailPanel({ po, onClose, onSave }) {
   const [pendingChanges, setPendingChanges] = useState({})
   const [pdfLoading, setPdfLoading]       = useState(false)
 
+  // ── Line items ──────────────────────────────────────────────────────────────
+  const [lineItems, setLineItems]         = useState([])
+  const [itemDeliveries, setItemDeliveries] = useState({})  // { [itemId]: stringValue }
+  const [itemsSaving, setItemsSaving]     = useState(false)
+  const [itemsError, setItemsError]       = useState('')
+  const [itemsMsg, setItemsMsg]           = useState('')
+
   useEffect(() => { setForm({ ...po }); setPendingChanges({}) }, [po])
+
+  async function loadLineItems() {
+    const { data, error } = await supabase
+      .from('po_line_items')
+      .select('*')
+      .eq('po_id', po.id)
+      .order('created_at', { ascending: true })
+    if (error) { console.error('Load line items error:', error); return }
+    setLineItems(data || [])
+    setItemDeliveries(Object.fromEntries((data || []).map(it => [it.id, String(it.quantity_delivered ?? 0)])))
+  }
+
+  useEffect(() => {
+    if (po?.id) { setItemsError(''); setItemsMsg(''); loadLineItems() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [po?.id])
 
   async function handleDownloadPDF() {
     setPdfLoading(true)
@@ -107,7 +163,7 @@ export default function PODetailPanel({ po, onClose, onSave }) {
         .select('*, users(name, email)')
         .eq('po_id', po.id)
         .order('changed_at', { ascending: false })
-      await generateSinglePOReport(form, auditLog || [])
+      await generateSinglePOReport(form, auditLog || [], lineItems || [])
     } catch (e) {
       console.error('PDF generation error:', e)
     }
@@ -115,9 +171,74 @@ export default function PODetailPanel({ po, onClose, onSave }) {
   }
 
   const role      = profile?.role
+  const teamCode  = profile?.team_code
   const canEdit   = (key) => canEditField(role, key)
   const canSave   = hasAnyEditableField(role)
   const isCSuite  = role === 'csuite'
+
+  const canEditDeliveries = role === 'rig' || role === 'admin'
+
+  // ── Save changed line-item delivered quantities (rig + admin) ───────────────
+  async function handleSaveDeliveries() {
+    setItemsError('')
+    setItemsMsg('')
+
+    // Only items whose delivered value actually changed
+    const changed = lineItems.filter(it => {
+      const newVal = Number(itemDeliveries[it.id])
+      return !Number.isNaN(newVal) && newVal !== Number(it.quantity_delivered ?? 0)
+    })
+
+    if (changed.length === 0) { setItemsMsg('No delivery changes to save.'); return }
+
+    // Client-side validation: delivered cannot exceed ordered
+    for (const it of changed) {
+      const newVal = Number(itemDeliveries[it.id])
+      if (newVal < 0) { setItemsError(`"${it.item_name}": delivered cannot be negative.`); return }
+      if (newVal > Number(it.quantity_ordered)) {
+        setItemsError(`"${it.item_name}": delivered (${newVal}) cannot exceed ordered (${it.quantity_ordered}).`)
+        return
+      }
+    }
+
+    setItemsSaving(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      for (const it of changed) {
+        const resp = await fetch(`/api/po/items/${it.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type':  'application/json',
+            'Authorization': `Bearer ${session?.access_token}`,
+          },
+          body: JSON.stringify({ quantity_delivered: Number(itemDeliveries[it.id]) }),
+        })
+        const result = await resp.json()
+        if (!resp.ok) {
+          setItemsError(result.error || `Failed to update "${it.item_name}"`)
+          setItemsSaving(false)
+          return
+        }
+      }
+      await loadLineItems()
+      setItemsMsg(`Updated ${changed.length} item${changed.length > 1 ? 's' : ''}.`)
+      onSave?.()
+    } catch (err) {
+      console.error('Save deliveries error:', err)
+      setItemsError(`Network error: ${err.message}`)
+    }
+    setItemsSaving(false)
+  }
+
+  // Issue 6: logistics DC field visibility — each team code sees only their DC field.
+  // All other roles see all fields.
+  function showField(fieldKey) {
+    if (!DC_FIELDS.has(fieldKey)) return true           // non-DC fields always shown
+    if (role !== 'logistics' || !teamCode) return true  // non-logistics or no team code → all DC fields
+    const allowedDC = DC_TEAM_MAP[teamCode]
+    if (!allowedDC) return true                         // unknown team code → show all
+    return fieldKey === allowedDC
+  }
 
   function set(key, val) {
     setForm(f => ({ ...f, [key]: val }))
@@ -255,7 +376,7 @@ export default function PODetailPanel({ po, onClose, onSave }) {
                 {section.label}
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {section.fields.map(f => {
+                {section.fields.filter(f => showField(f.key)).map(f => {
                   const wide = f.type === 'textarea'
                   const editable = canEdit(f.key)
 
@@ -281,7 +402,18 @@ export default function PODetailPanel({ po, onClose, onSave }) {
                   return (
                     <div key={f.key} className={wideClass}>
                       <label className="label">{f.label}</label>
-                      {f.type === 'select' ? (
+                      {f.key === 'vendor_name' ? (
+                        <VendorAutocomplete
+                          value={form.vendor_name || ''}
+                          onChange={v => set('vendor_name', v)}
+                          onSelect={vendor => {
+                            set('vendor_name', vendor.name)
+                            if (vendor.contact_person && canEdit('vendor_contact_name')) set('vendor_contact_name', vendor.contact_person)
+                            if (vendor.phone && canEdit('vendor_phone_number')) set('vendor_phone_number', vendor.phone)
+                          }}
+                          placeholder="Search or type vendor name"
+                        />
+                      ) : f.type === 'select' ? (
                         <select
                           className={baseClass}
                           value={form[f.key] || ''}
@@ -311,6 +443,102 @@ export default function PODetailPanel({ po, onClose, onSave }) {
               </div>
             </div>
           ))}
+
+          {/* ── Line Items ─────────────────────────────────────────────────── */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
+                Line Items {lineItems.length > 0 && `(${lineItems.length})`}
+              </h3>
+              {canEditDeliveries && lineItems.length > 0 && (
+                <button
+                  onClick={handleSaveDeliveries}
+                  disabled={itemsSaving}
+                  className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-60"
+                >
+                  {itemsSaving && <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                  {itemsSaving ? 'Saving…' : 'Save Deliveries'}
+                </button>
+              )}
+            </div>
+
+            {lineItems.length === 0 ? (
+              <p className="text-sm text-gray-400 dark:text-gray-500 italic py-2">No line items for this PO.</p>
+            ) : (
+              <div className="overflow-x-auto -mx-1 px-1">
+                <table className="w-full text-sm min-w-[420px]">
+                  <thead>
+                    <tr className="border-b border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
+                      <th className="text-left py-2 pr-2 font-medium">Item</th>
+                      <th className="text-center py-2 px-2 font-medium">Ordered</th>
+                      <th className="text-center py-2 px-2 font-medium">Delivered</th>
+                      <th className="text-center py-2 px-2 font-medium">Pending</th>
+                      <th className="text-right py-2 pl-2 font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lineItems.map(it => {
+                      const ordered   = Number(it.quantity_ordered) || 0
+                      const delivered = canEditDeliveries
+                        ? (itemDeliveries[it.id] ?? '')
+                        : (it.quantity_delivered ?? 0)
+                      const pending = Math.max(0, ordered - (Number(delivered) || 0))
+                      return (
+                        <tr key={it.id} className="border-b border-gray-100 dark:border-gray-800 align-top">
+                          <td className="py-2 pr-2">
+                            <p className="font-medium text-gray-800 dark:text-gray-200">{it.item_name}</p>
+                            {it.material_description && (
+                              <p className="text-xs text-gray-400 dark:text-gray-500 truncate max-w-[160px]" title={it.material_description}>
+                                {it.material_description}
+                              </p>
+                            )}
+                          </td>
+                          <td className="text-center py-2 px-2 text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                            {ordered}{it.unit ? ` ${it.unit}` : ''}
+                          </td>
+                          <td className="text-center py-2 px-2">
+                            {canEditDeliveries ? (
+                              <input
+                                type="number"
+                                min="0"
+                                max={ordered}
+                                step="any"
+                                className="input-field text-sm text-center w-20 py-1 px-1.5 mx-auto"
+                                value={itemDeliveries[it.id] ?? ''}
+                                onChange={e => setItemDeliveries(p => ({ ...p, [it.id]: e.target.value }))}
+                              />
+                            ) : (
+                              <span className="text-gray-600 dark:text-gray-400">{it.quantity_delivered ?? 0}</span>
+                            )}
+                          </td>
+                          <td className="text-center py-2 px-2 font-medium text-gray-700 dark:text-gray-300">
+                            {pending}
+                          </td>
+                          <td className="text-right py-2 pl-2">
+                            <ItemStatusPill status={it.item_status} />
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {itemsError && (
+              <p className="mt-2 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2 break-words">
+                {itemsError}
+              </p>
+            )}
+            {itemsMsg && !itemsError && (
+              <p className="mt-2 text-xs text-green-600 dark:text-green-400">{itemsMsg}</p>
+            )}
+            {canEditDeliveries && lineItems.length > 0 && (
+              <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+                Saving a partial delivery (delivered &lt; ordered) notifies the rig &amp; purchase teams by email.
+              </p>
+            )}
+          </div>
         </div>
 
         {/* Footer — hidden for csuite, shown for all editing roles */}

@@ -6,12 +6,14 @@ export const ROLE_EDITABLE_FIELDS = {
     'mr_number', 'po_number', 'po_date', 'promised_ready_date',
     'rig_name', 'vendor_name', 'vendor_contact_name', 'vendor_phone_number',
     'buyer_code', 'material_description', 'material_description_2',
-    'delivery_mode', 'remarks',
+    'quantity_weight', 'delivery_mode', 'remarks',
   ],
   logistics: [
+    // Formerly "Vendor Confirmed Date" and "Material Ready Date" — now logistics-owned
+    'vendor_confirmed_date', 'material_ready_date', 'material_collection_location',
     'dispatch_date',
     'dc_number_bkc', 'dc_number_taloja', 'dc_number_nagothane', 'dc_number_nhava',
-    'transporter_details', 'jdil_location', 'in_transit_rig_date',
+    'mode_of_transport', 'transporter_details', 'jdil_location', 'in_transit_rig_date',
   ],
   rig: [
     'delivered_to_rig_date', 'other_remarks',

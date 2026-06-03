@@ -64,6 +64,7 @@ export default function Dashboard() {
   const { profile } = useAuth()
   const { dark } = useTheme()
   const [orders, setOrders]       = useState([])
+  const [lineItems, setLineItems] = useState([])
   const [loading, setLoading]     = useState(true)
   const [rigFilter, setRigFilter] = useState('all')
 
@@ -74,9 +75,14 @@ export default function Dashboard() {
       if (profile?.role === 'rig' && profile?.rig_name) {
         q = q.eq('rig_name', profile.rig_name)
       }
-      const { data, error } = await q
-      if (error) console.error('Dashboard fetch error:', error)
+      const [{ data, error }, { data: items, error: itemsErr }] = await Promise.all([
+        q,
+        supabase.from('po_line_items').select('id, po_id, quantity_ordered, quantity_delivered, item_status'),
+      ])
+      if (error)    console.error('Dashboard fetch error:', error)
+      if (itemsErr) console.error('Dashboard line items fetch error:', itemsErr)
       setOrders(data || [])
+      setLineItems(items || [])
       setLoading(false)
     }
     load()
@@ -96,6 +102,15 @@ export default function Dashboard() {
     () => filtered.filter(o => !!o.delivered_to_rig_date),
     [filtered]
   )
+
+  // ── Line item stats (scoped to the filtered POs) ──────────────────────────
+  const itemStats = useMemo(() => {
+    const ids   = new Set(filtered.map(o => o.id))
+    const items = lineItems.filter(it => ids.has(it.po_id))
+    const total   = items.length
+    const pending = items.filter(it => it.item_status !== 'Fully Delivered').length
+    return { total, pending }
+  }, [lineItems, filtered])
 
   // ── KPIs ──────────────────────────────────────────────────────────────────
   const kpis = useMemo(() => {
@@ -294,7 +309,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── KPI Row ── */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
         <KPICard
           title="On-Time Delivery"
           value={kpis.onTimePct !== null ? `${kpis.onTimePct}%` : '—'}
@@ -336,6 +351,20 @@ export default function Dashboard() {
           sub="avg dispatch→rig handoff"
           color="orange"
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>}
+        />
+        <KPICard
+          title="Total Line Items"
+          value={itemStats.total}
+          sub="across all POs"
+          color="blue"
+          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" /></svg>}
+        />
+        <KPICard
+          title="Items Pending Delivery"
+          value={itemStats.pending}
+          sub="not fully delivered"
+          color="orange"
+          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg>}
         />
       </div>
 
