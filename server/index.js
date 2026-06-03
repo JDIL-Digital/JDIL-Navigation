@@ -26,11 +26,13 @@ const poRoutes     = require('./routes/po')
 const userRoutes   = require('./routes/users')
 const notifRoutes  = require('./routes/notifications')
 const reportRoutes = require('./routes/reports')
+const vendorRoutes = require('./routes/vendors')
 
 app.use('/api/po',            poRoutes)
 app.use('/api/users',         userRoutes)
 app.use('/api/notifications', notifRoutes)
 app.use('/api/reports',       reportRoutes)
+app.use('/api/vendors',       vendorRoutes)
 
 app.get('/api/health', (_req, res) =>
   res.json({ status: 'ok', env: IS_PROD ? 'production' : 'development', ts: new Date().toISOString() })

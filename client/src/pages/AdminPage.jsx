@@ -3,8 +3,9 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { formatDate } from '../utils/helpers'
 import { BUYER_CODES, LOGISTICS_CODES, PO_RIG_OPTIONS } from '../utils/constants'
+import VendorsTab from '../components/ui/VendorsTab'
 
-const TABS = ['User Management', 'Audit Log', 'System Settings']
+const TABS = ['User Management', 'Audit Log', 'System Settings', 'Vendors']
 
 // ── API helper (calls Express /api/users with the user's JWT) ─────────────────
 async function userApi(path, method = 'GET', body = undefined) {
@@ -698,6 +699,11 @@ export default function AdminPage() {
           )}
         </div>
       )}
+
+      {/* ══════════════════════════════════════════════
+          TAB 3 — VENDORS
+      ══════════════════════════════════════════════ */}
+      {tab === 3 && <VendorsTab />}
 
       {/* ── Edit User Modal ── */}
       {editingUser && (

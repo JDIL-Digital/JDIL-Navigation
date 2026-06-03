@@ -12,10 +12,14 @@ import LogisticsPage from './pages/LogisticsPage'
 import RigPage from './pages/RigPage'
 import AdminPage from './pages/AdminPage'
 import AdminLoginPage from './pages/AdminLoginPage'
+import AuthCallback from './pages/AuthCallback'
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, profile, loading, profileLoading } = useAuth()
-  if (loading || profileLoading) return <div className="flex items-center justify-center h-screen"><Spinner /></div>
+  // Only block on profileLoading if we actually have a user — avoids hanging
+  // the spinner for unauthenticated bookmarked URLs waiting on a profile that
+  // will never load.
+  if (loading || (profileLoading && !!user)) return <div className="flex items-center justify-center h-screen"><Spinner /></div>
   if (!user) return <Navigate to="/login" replace />
   if (!profile?.is_active) return <Navigate to="/pending" replace />
   if (allowedRoles && !allowedRoles.includes(profile?.role)) return <Navigate to="/" replace />
@@ -45,6 +49,10 @@ function AppRoutes() {
       <Route path="/admin-login" element={!user ? <AdminLoginPage /> : <Navigate to="/admin" replace />} />
       <Route path="/register" element={!user ? <RegisterPage /> : <Navigate to="/" replace />} />
       <Route path="/pending" element={<PendingApproval />} />
+
+      {/* Magic-link landing — always renders (no auth-state redirect) so it can
+          confirm the session and self-close the tab. */}
+      <Route path="/auth/callback" element={<AuthCallback />} />
 
       <Route path="/" element={
         <ProtectedRoute>
@@ -76,7 +84,8 @@ function AppRoutes() {
         } />
       </Route>
 
-      <Route path="*" element={<Navigate to="/" replace />} />
+      {/* Unknown paths → send unauthenticated users to login, authenticated to home */}
+      <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
   )
 }

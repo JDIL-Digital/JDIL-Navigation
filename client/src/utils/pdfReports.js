@@ -606,7 +606,7 @@ function getMonthlyTrend(allOrders) {
 // ══════════════════════════════════════════════════════════════════════════════
 //  REPORT 1 — SINGLE PO DETAIL
 // ══════════════════════════════════════════════════════════════════════════════
-export async function generateSinglePOReport(po, auditLog = []) {
+export async function generateSinglePOReport(po, auditLog = [], lineItems = []) {
   const logoData = await getLogoData()
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
   const pageW = doc.internal.pageSize.getWidth()
@@ -680,22 +680,57 @@ export async function generateSinglePOReport(po, auditLog = []) {
   })
   y = doc.lastAutoTable.finalY + 6
 
+  // ── Line Items ────────────────────────────────────────────────────────────
+  if (lineItems && lineItems.length > 0) {
+    y = sectionTitle(doc, `LINE ITEMS (${lineItems.length})`, y)
+    doc.autoTable({
+      startY: y,
+      margin: { left: MARGIN, right: MARGIN, top: HEADER_H + 10, bottom: 18 },
+      head: [['Item Name', 'Material Description', 'Unit', 'Ordered', 'Delivered', 'Pending', 'Status']],
+      body: lineItems.map(it => {
+        const ordered   = Number(it.quantity_ordered)   || 0
+        const delivered = Number(it.quantity_delivered)  || 0
+        const pending   = Math.max(0, ordered - delivered)
+        return [
+          it.item_name            || '—',
+          it.material_description || '—',
+          it.unit                 || '—',
+          String(ordered),
+          String(delivered),
+          String(pending),
+          it.item_status          || 'Pending',
+        ]
+      }),
+      theme: 'striped',
+      headStyles: { fillColor: SLATE, textColor: 255, fontStyle: 'bold', fontSize: 7.5 },
+      styles: { fontSize: 8, cellPadding: 2 },
+      columnStyles: {
+        3: { halign: 'center', cellWidth: 18 },
+        4: { halign: 'center', cellWidth: 18 },
+        5: { halign: 'center', cellWidth: 18 },
+        6: { cellWidth: 28 },
+      },
+    })
+    y = doc.lastAutoTable.finalY + 6
+  }
+
   // ── Logistics Details ─────────────────────────────────────────────────────
   y = sectionTitle(doc, 'LOGISTICS DETAILS', y)
   doc.autoTable({
     startY: y,
     margin: { left: MARGIN, right: MARGIN, top: HEADER_H + 10, bottom: 18 },
     body: [
-      ['Vendor Confirmed Date',  formatDate(po.vendor_confirmed_date)],
-      ['Material Ready Date',    formatDate(po.material_ready_date)],
-      ['Dispatch Date',          formatDate(po.dispatch_date)],
-      ['DC Number (BKC)',        po.dc_number_bkc       || '—'],
-      ['DC Number (Taloja)',     po.dc_number_taloja    || '—'],
-      ['DC Number (Nagothane)',  po.dc_number_nagothane || '—'],
-      ['DC Number (Nhava)',      po.dc_number_nhava     || '—'],
-      ['Transporter Details',    po.transporter_details || '—'],
-      ['JDIL Location',          po.jdil_location       || '—'],
-      ['In Transit to Rig Date', formatDate(po.in_transit_rig_date)],
+      ['Material Collection Date',     formatDate(po.vendor_confirmed_date)],
+      ['Material Collection Location', po.material_collection_location || '—'],
+      ['Dispatch Date',                formatDate(po.dispatch_date)],
+      ['DC Number (BKC)',              po.dc_number_bkc       || '—'],
+      ['DC Number (Taloja)',           po.dc_number_taloja    || '—'],
+      ['DC Number (Nagothane)',        po.dc_number_nagothane || '—'],
+      ['DC Number (Nhava)',            po.dc_number_nhava     || '—'],
+      ['Mode of Transport',            po.mode_of_transport   || '—'],
+      ['Transporter Detail',           po.transporter_details || '—'],
+      ['JDIL Location',                po.jdil_location       || '—'],
+      ['In Transit to Rig Date',       formatDate(po.in_transit_rig_date)],
     ],
     theme: 'grid',
     styles: { fontSize: 8.5, cellPadding: 2.5 },

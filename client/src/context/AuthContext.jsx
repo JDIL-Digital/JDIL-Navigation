@@ -76,11 +76,16 @@ export function AuthProvider({ children }) {
    * Uses Supabase Email OTP (signInWithOtp).
    */
   async function sendOTP(email) {
-    // Omitting emailRedirectTo forces Supabase to send a 6-digit OTP
-    // instead of a magic link.
+    // The email contains BOTH a 6-digit code (entered in the original tab) and
+    // a magic link. Point the magic link at /auth/callback so the tab it opens
+    // can confirm the session and then self-close, leaving the original tab
+    // logged in. The 6-digit OTP entry flow continues to work unchanged.
+    const redirectTo = typeof window !== 'undefined'
+      ? `${window.location.origin}/auth/callback`
+      : undefined
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { shouldCreateUser: false, emailRedirectTo: undefined },
+      options: { shouldCreateUser: false, emailRedirectTo: redirectTo },
     })
     return { error }
   }
@@ -99,6 +104,12 @@ export function AuthProvider({ children }) {
   }
 
   async function signOut() {
+    // Clear any chatbot session history so the next user starts fresh
+    try {
+      Object.keys(sessionStorage)
+        .filter(k => k.startsWith('jdil-chat-'))
+        .forEach(k => sessionStorage.removeItem(k))
+    } catch { /* ignore */ }
     await supabase.auth.signOut()
     setProfile(null)
   }

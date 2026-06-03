@@ -270,13 +270,15 @@ function accountApprovedEmail(user) {
     ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
     : null
 
+  const loginUrl = 'https://jdil-navigation.replit.app/login'
+
   const body = `
-    <p style="margin:0 0 4px;font-size:16px;font-weight:600;color:#111827">Hi ${user.name || 'there'},</p>
-    <p style="margin:0 0 22px;font-size:13px;color:#6b7280">Welcome to JDIL Navigation.</p>
+    <p style="margin:0 0 4px;font-size:22px;font-weight:700;color:#166534">Your JDIL Navigation account has been approved!</p>
+    <p style="margin:8px 0 22px;font-size:13px;color:#6b7280">Hi ${user.name || 'there'}, welcome to JDIL Navigation.</p>
 
     <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 20px;margin-bottom:22px">
       <p style="margin:0;font-size:14px;color:#166534;line-height:1.5">
-        &#10003; Your account has been <strong>approved</strong> by an administrator. You can now sign in and access the system.
+        &#10003; Your account has been <strong>approved</strong> by an administrator. You now have full access to the system based on your assigned role.
       </p>
     </div>
 
@@ -284,14 +286,20 @@ function accountApprovedEmail(user) {
     <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;border-collapse:collapse">
       ${detailRow('Name',         user.name)}
       ${detailRow('Email',        user.email)}
-      ${detailRow('Role',         roleLabel)}
+      ${detailRow('Role',         roleLabel, true)}
       ${user.team_code ? detailRow('Team Code',    user.team_code) : ''}
       ${user.rig_name  ? detailRow('Assigned Rig', user.rig_name)  : ''}
     </table>
 
-    ${ctaButton('Sign In to JDIL Navigation', `${APP_URL}/login`)}
+    <p style="margin:24px 0 6px;font-size:14px;color:#374151;font-weight:500">Click the button below to login to JDIL Navigation:</p>
+    ${ctaButton('Login to JDIL Navigation', loginUrl)}
+
+    <p style="margin:18px 0 0;font-size:12px;color:#9ca3af">
+      Or copy this link into your browser:<br>
+      <a href="${loginUrl}" style="color:#1a7a3c">${loginUrl}</a>
+    </p>
   `
-  return emailBase('Account Approved', body)
+  return emailBase('Account Approved ✓', body)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -326,6 +334,50 @@ function newRegistrationEmail(user) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 6. Partial Delivery Alert (line item)
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Sent to rig users for the PO's rig + all purchase users when a line item
+ * is partially delivered (delivered < ordered).
+ * @param {object} po   — the parent po_orders row
+ * @param {object} item — the updated po_line_items row
+ */
+function partialDeliveryEmail(po, item) {
+  const ordered   = Number(item.quantity_ordered)   || 0
+  const delivered = Number(item.quantity_delivered)  || 0
+  const pending   = Math.max(0, ordered - delivered)
+  const unit      = item.unit ? ` ${item.unit}` : ''
+
+  const body = `
+    <p style="margin:0 0 20px;font-size:16px;font-weight:600;color:#111827">A line item has been partially delivered.</p>
+
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:16px 20px;margin-bottom:22px">
+      <p style="margin:0;font-size:14px;color:#92400e;line-height:1.6">
+        Item <strong>${item.item_name}</strong>: <strong style="color:#b45309">${delivered}${unit}</strong> of
+        <strong>${ordered}${unit}</strong> delivered.
+        <strong style="color:#dc2626">${pending}${unit} pending.</strong><br>
+        Rig: <strong>${po.rig_name || '—'}</strong>
+      </p>
+    </div>
+
+    ${sectionHead('Line Item Details')}
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;border-collapse:collapse">
+      ${detailRow('PO Number',          po.po_number, true)}
+      ${detailRow('Rig / Location',     po.rig_name)}
+      ${detailRow('Item Name',          item.item_name)}
+      ${detailRow('Material',           item.material_description)}
+      ${detailRow('Quantity Ordered',   `${ordered}${unit}`)}
+      ${detailRow('Quantity Delivered', `${delivered}${unit}`, true)}
+      ${detailRow('Quantity Pending',   `${pending}${unit}`)}
+      ${detailRow('Updated At',         fmtDateTime(new Date().toISOString()))}
+    </table>
+
+    ${ctaButton('View PO in JDIL Navigation', APP_URL)}
+  `
+  return emailBase('Partial Delivery Alert', body)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 module.exports = {
   sendEmail,
   newPOEmail,
@@ -333,4 +385,5 @@ module.exports = {
   staleAlertEmail,
   accountApprovedEmail,
   newRegistrationEmail,
+  partialDeliveryEmail,
 }

@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { supabase } from '../lib/supabase'
 import jindalLogo from '../assets/Jindal_Logo.jpg'
 import OTPScreen from '../components/ui/OTPScreen'
 import { isAllowedEmail, DOMAIN_ERROR, recordFailedAttempt } from '../utils/authValidation'
@@ -19,6 +20,33 @@ export default function AdminLoginPage() {
   const [step, setStep]             = useState('form')   // 'form' | 'otp'
   const [otpLoading, setOtpLoading] = useState(false)
   const [otpError, setOtpError]     = useState('')
+
+  // ── Cross-tab login detection ─────────────────────────────────────────────
+  // If the user completes login in another tab (e.g. via a magic link) while
+  // this tab is on the "check your email" screen, detect the new session here
+  // and move straight into the admin panel.
+  useEffect(() => {
+    if (step !== 'otp') return
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session) {
+        navigate('/admin', { replace: true })
+      }
+    })
+
+    async function onStorage(e) {
+      if (e.key && e.key.includes('-auth-token') && e.newValue) {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (session) navigate('/admin', { replace: true })
+      }
+    }
+    window.addEventListener('storage', onStorage)
+
+    return () => {
+      subscription.unsubscribe()
+      window.removeEventListener('storage', onStorage)
+    }
+  }, [step, navigate])
 
   // ── Step 1: verify domain + password, then send OTP ──────────────────────
   async function handleSubmit(e) {

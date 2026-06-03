@@ -30,7 +30,7 @@ export function calcStatus(po) {
   if (po.dispatch_date)         return 'In Transit to JDIL'
   if (po.dc_number_bkc || po.dc_number_taloja || po.dc_number_nagothane || po.dc_number_nhava)
                                 return 'Dispatched from Vendor'
-  if (po.material_ready_date)   return 'Material Ready at Vendor'
+  if (po.material_collection_location || po.material_ready_date) return 'Material Ready at Vendor'
   if (po.vendor_confirmed_date) return 'Vendor Confirmed'
   if (po.buyer_code)            return 'Buyer Assigned'
   if (po.po_number)             return 'PO Released'
