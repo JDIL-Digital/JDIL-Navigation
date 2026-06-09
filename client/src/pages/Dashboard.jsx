@@ -5,7 +5,7 @@ import {
 } from 'recharts'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
-import { calcStatus, daysElapsed } from '../utils/helpers'
+import { calcStatus, daysElapsed, overdueDays } from '../utils/helpers'
 import { PO_STATUSES, PO_RIG_OPTIONS, OVERDUE_DAYS } from '../utils/constants'
 import KPICard from '../components/ui/KPICard'
 import MaterialMap from '../components/ui/MaterialMap'
@@ -14,11 +14,11 @@ import { useTheme } from '../context/ThemeContext'
 
 // ─── Stage transitions for "avg days per stage" chart ────────────────────────
 const STAGE_PAIRS = [
-  { label: 'PO→Vendor\nConf',    f1: 'po_date',               f2: 'vendor_confirmed_date' },
-  { label: 'Conf→Matl\nReady',   f1: 'vendor_confirmed_date', f2: 'material_ready_date'   },
-  { label: 'Matl→\nDispatch',    f1: 'material_ready_date',   f2: 'dispatch_date'          },
-  { label: 'Dispatch→\nRig Dep', f1: 'dispatch_date',         f2: 'in_transit_rig_date'   },
-  { label: 'In Transit\n→Rig',   f1: 'in_transit_rig_date',   f2: 'delivered_to_rig_date' },
+  { label: 'PO→Vendor\nConf',    f1: 'po_date',                f2: 'promised_ready_date'   },
+  { label: 'Conf→\nReceived',    f1: 'promised_ready_date',    f2: 'material_received_date' },
+  { label: 'Received→\nDispatch',f1: 'material_received_date', f2: 'dispatch_date'          },
+  { label: 'Dispatch→\nIn Transit', f1: 'dispatch_date',       f2: 'in_transit_rig_date'   },
+  { label: 'In Transit\n→Rig',   f1: 'in_transit_rig_date',    f2: 'delivered_to_rig_date' },
 ]
 
 // ─── Pipeline stage label abbreviations ──────────────────────────────────────
@@ -27,10 +27,9 @@ const STAGE_LABELS = {
   'PO Released':              'PO Released',
   'Buyer Assigned':           'Buyer Assigned',
   'Vendor Confirmed':         'Vendor Confirmed',
-  'Material Ready at Vendor': 'Matl Ready',
-  'Dispatched from Vendor':   'Dispatched',
   'In Transit to JDIL':       'In Transit→JDIL',
   'At JDIL Location':         'At JDIL',
+  'Dispatched from JDIL':     'Disp→JDIL',
   'In Transit to Rig':        'In Transit→Rig',
   'Delivered to Rig':         'Delivered',
 }
@@ -135,8 +134,8 @@ export default function Dashboard() {
     // 3. Open POs
     const openCount = openPOs.length
 
-    // 4. Stale POs (open + older than OVERDUE_DAYS)
-    const staleCount = openPOs.filter(o => daysElapsed(o.po_date) > OVERDUE_DAYS).length
+    // 4. Stale POs (open + more than OVERDUE_DAYS past promised ready date)
+    const staleCount = openPOs.filter(o => overdueDays(o) > OVERDUE_DAYS).length
 
     // 5. Vendor score — average of per-vendor on-time %
     const vendorMap = {}
@@ -212,8 +211,8 @@ export default function Dashboard() {
   // ── Status distribution (donut) ───────────────────────────────────────────
   const statusDist = useMemo(() => {
     const delivered    = filtered.filter(o => calcStatus(o) === 'Delivered to Rig').length
-    const stale        = openPOs.filter(o => daysElapsed(o.po_date) > OVERDUE_DAYS).length
-    const nonStale     = openPOs.filter(o => daysElapsed(o.po_date) <= OVERDUE_DAYS)
+    const stale        = openPOs.filter(o => overdueDays(o) > OVERDUE_DAYS).length
+    const nonStale     = openPOs.filter(o => overdueDays(o) <= OVERDUE_DAYS)
     const inTransit    = nonStale.filter(o => ['In Transit to Rig','In Transit to JDIL'].includes(calcStatus(o))).length
     const atJDIL       = nonStale.filter(o => calcStatus(o) === 'At JDIL Location').length
     const readyVendor  = nonStale.filter(o => calcStatus(o) === 'Material Ready at Vendor').length
@@ -231,8 +230,8 @@ export default function Dashboard() {
   // ── Top 10 stale POs ─────────────────────────────────────────────────────
   const stalePOList = useMemo(() =>
     openPOs
-      .filter(o => daysElapsed(o.po_date) > OVERDUE_DAYS)
-      .sort((a, b) => daysElapsed(b.po_date) - daysElapsed(a.po_date))
+      .filter(o => overdueDays(o) > OVERDUE_DAYS)
+      .sort((a, b) => overdueDays(b) - overdueDays(a))
       .slice(0, 10),
     [openPOs]
   )
@@ -544,7 +543,7 @@ export default function Dashboard() {
                     </p>
                   </div>
                   <span className="shrink-0 bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 text-xs font-bold rounded-full px-2 py-0.5 whitespace-nowrap">
-                    {daysElapsed(po.po_date)}d
+                    {overdueDays(po)}d
                   </span>
                 </div>
               ))}

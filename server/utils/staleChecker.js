@@ -35,10 +35,15 @@ async function checkStaleOrders() {
     if (!orders?.length) return
 
     const now = new Date()
+    // Overdue is measured from promised_ready_date; fall back to po_date if absent.
+    const baseDate = o => o.promised_ready_date || o.po_date
+    const daysPastBase = o => {
+      const base = baseDate(o)
+      return base ? Math.floor((now - new Date(base)) / 86400000) : 0
+    }
     const stale = orders.filter(o => {
-      if (!o.po_date) return false
-      const days = Math.floor((now - new Date(o.po_date)) / 86400000)
-      return days > overdueDays
+      if (!baseDate(o)) return false
+      return daysPastBase(o) > overdueDays
     })
 
     if (!stale.length) return
@@ -85,7 +90,7 @@ async function checkStaleOrders() {
           user_id: u.id,
           type: 'overdue',
           title: `Stale PO: ${po.po_number}`,
-          message: `${po.po_number} for ${po.rig_name} has been open for ${Math.floor((now - new Date(po.po_date)) / 86400000)} days`,
+          message: `${po.po_number} for ${po.rig_name} is ${daysPastBase(po)} days past its promised ready date`,
           is_read: false,
           created_at: now.toISOString(),
         })))
