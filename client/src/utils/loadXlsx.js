@@ -28,6 +28,20 @@ export function loadXlsx() {
 }
 
 /**
+ * Writes an array of row objects to an .xlsx file and triggers a download.
+ * @param {object[]} rows      — array of plain objects (keys become column headers)
+ * @param {string}   filename  — e.g. "JDIL_Navigation_Purchase_2026-06-09.xlsx"
+ * @param {string}   sheetName — worksheet tab name (default "Sheet1")
+ */
+export async function exportToExcel(rows, filename, sheetName = 'Sheet1') {
+  const XLSX = await loadXlsx()
+  const ws = XLSX.utils.json_to_sheet(rows)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31))  // Excel caps sheet names at 31 chars
+  XLSX.writeFile(wb, filename)
+}
+
+/**
  * Parses an Excel/CSV File into an array of row objects keyed by header.
  * @param {File} file
  * @returns {Promise<object[]>}

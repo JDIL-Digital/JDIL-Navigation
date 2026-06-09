@@ -6,7 +6,7 @@ export const ROLE_EDITABLE_FIELDS = {
     'mr_number', 'po_number', 'po_date', 'promised_ready_date',
     'rig_name', 'vendor_name', 'vendor_contact_name', 'vendor_phone_number',
     'buyer_code', 'material_description', 'material_description_2',
-    'quantity_weight', 'delivery_mode', 'remarks',
+    'quantity_weight', 'delivery_mode',
   ],
   logistics: [
     // Formerly "Vendor Confirmed Date" and "Material Ready Date" — now logistics-owned
@@ -14,9 +14,10 @@ export const ROLE_EDITABLE_FIELDS = {
     'dispatch_date',
     'dc_number_bkc', 'dc_number_taloja', 'dc_number_nagothane', 'dc_number_nhava',
     'mode_of_transport', 'transporter_details', 'jdil_location', 'in_transit_rig_date',
+    'material_received_date', 'material_received_location',
   ],
   rig: [
-    'delivered_to_rig_date', 'other_remarks',
+    'delivered_to_rig_date', 'remarks', 'other_remarks',
   ],
   admin: null,  // null = all fields
   csuite: [],   // read-only

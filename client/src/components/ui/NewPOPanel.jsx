@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import VendorAutocomplete from './VendorAutocomplete'
 import { PO_RIG_OPTIONS, BUYER_CODES, DELIVERY_MODES, OVERDUE_DAYS } from '../../utils/constants'
-import { generateMRNumber, generatePONumber, daysElapsed } from '../../utils/helpers'
+import { daysElapsed, calcStatus, overdueDays } from '../../utils/helpers'
 
 const DRAFT_KEY = 'jdil-new-po-draft'
 
@@ -11,10 +11,10 @@ function emptyLineItem() {
   return { item_name: '', material_description: '', quantity_ordered: '', unit: '' }
 }
 
-function defaultForm(profile, existingCount) {
+function defaultForm(profile) {
   return {
-    mr_number:             generateMRNumber(existingCount),
-    po_number:             generatePONumber(existingCount),
+    mr_number:             '',
+    po_number:             '',
     po_date:               new Date().toISOString().split('T')[0],
     promised_ready_date:   '',
     rig_name:              '',
@@ -22,9 +22,7 @@ function defaultForm(profile, existingCount) {
     vendor_contact_name:   '',
     vendor_phone_number:   '',
     buyer_code:            profile?.team_code || '',
-    material_description:  '',
     material_description_2:'',
-    quantity_weight:       '',
     delivery_mode:         '',
     line_items:            [emptyLineItem()],
   }
@@ -78,6 +76,23 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
     saveDraft(form)
   }, [form])
 
+  // Warn before tab close / reload if the form has unsaved content
+  useEffect(() => {
+    const dirty = Boolean(
+      form.mr_number || form.po_number || form.vendor_name ||
+      form.material_description_2 ||
+      (form.line_items || []).some(it => it.item_name?.trim())
+    )
+    if (!dirty) return
+    function onBeforeUnload(e) {
+      e.preventDefault()
+      e.returnValue = 'You have unsaved changes. Are you sure you want to leave?'
+      return e.returnValue
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [form])
+
   function set(k, v) {
     setForm(f => ({ ...f, [k]: v }))
   }
@@ -116,9 +131,10 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
     e.preventDefault()
     setError('')
 
+    if (!form.mr_number.trim())            { setError('MR Number is required.');             return }
+    if (!form.po_number.trim())            { setError('PO Number is required.');             return }
     if (!form.rig_name)                    { setError('Rig / Location is required.');       return }
     if (!form.vendor_name.trim())          { setError('Vendor name is required.');           return }
-    if (!form.material_description.trim()) { setError('Material description is required.');  return }
 
     // At least one line item with a name is required
     const validItems = lineItems.filter(it => it.item_name && it.item_name.trim())
@@ -140,13 +156,11 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
       vendor_contact_name:    form.vendor_contact_name    || null,
       vendor_phone_number:    form.vendor_phone_number    || null,
       buyer_code:             form.buyer_code             || null,
-      material_description:   form.material_description,
       material_description_2: form.material_description_2 || null,
-      quantity_weight:        form.quantity_weight        || null,
       delivery_mode:          form.delivery_mode          || null,
-      status:                 'PO Released',
+      status:                 calcStatus(form),
       days_elapsed:           elapsed,
-      is_stale:               elapsed > OVERDUE_DAYS,
+      is_stale:               overdueDays(form) > OVERDUE_DAYS,
       created_by:             profile.id,
       updated_at:             new Date().toISOString(),
     }
@@ -247,28 +261,24 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
             <div>
-              <label className="label">
-                MR Number
-                <span className="ml-1.5 text-xs font-normal text-gray-400">(auto-generated, editable)</span>
-              </label>
+              <label className="label">MR Number <span className="text-red-500">*</span></label>
               <input
                 className="input-field"
                 value={form.mr_number}
                 onChange={e => set('mr_number', e.target.value)}
-                placeholder="MR-2026-001"
+                placeholder="Enter MR number"
+                required
               />
             </div>
 
             <div>
-              <label className="label">
-                PO Number
-                <span className="ml-1.5 text-xs font-normal text-gray-400">(auto-generated, editable)</span>
-              </label>
+              <label className="label">PO Number <span className="text-red-500">*</span></label>
               <input
                 className="input-field"
                 value={form.po_number}
                 onChange={e => set('po_number', e.target.value)}
-                placeholder="PO-2026-001"
+                placeholder="Enter PO number"
+                required
               />
             </div>
 
@@ -280,16 +290,6 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
                 value={form.po_date}
                 onChange={e => set('po_date', e.target.value)}
                 required
-              />
-            </div>
-
-            <div>
-              <label className="label">Promised Ready Date</label>
-              <input
-                type="date"
-                className="input-field"
-                value={form.promised_ready_date}
-                onChange={e => set('promised_ready_date', e.target.value)}
               />
             </div>
 
@@ -339,79 +339,6 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
                   {BUYER_CODES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               )}
-            </div>
-
-            {/* Spacer */}
-            <div />
-
-            <div>
-              <label className="label">Vendor Name <span className="text-red-500">*</span></label>
-              <VendorAutocomplete
-                value={form.vendor_name}
-                onChange={v => set('vendor_name', v)}
-                onSelect={vendor => setForm(f => ({
-                  ...f,
-                  vendor_name:         vendor.name,
-                  vendor_contact_name: vendor.contact_person || f.vendor_contact_name,
-                  vendor_phone_number: vendor.phone          || f.vendor_phone_number,
-                }))}
-                placeholder="Search or type vendor name"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="label">Vendor Contact Name</label>
-              <input
-                className="input-field"
-                value={form.vendor_contact_name}
-                onChange={e => set('vendor_contact_name', e.target.value)}
-                placeholder="Contact person"
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="label">Vendor Phone Number</label>
-              <input
-                type="tel"
-                className="input-field"
-                value={form.vendor_phone_number}
-                onChange={e => set('vendor_phone_number', e.target.value)}
-                placeholder="+91 98765 43210"
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="label">Material Description <span className="text-red-500">*</span></label>
-              <textarea
-                className="input-field resize-none"
-                rows={2}
-                value={form.material_description}
-                onChange={e => set('material_description', e.target.value)}
-                placeholder="Primary material description"
-                required
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="label">Material Description 2</label>
-              <textarea
-                className="input-field resize-none"
-                rows={2}
-                value={form.material_description_2}
-                onChange={e => set('material_description_2', e.target.value)}
-                placeholder="Additional description (optional)"
-              />
-            </div>
-
-            <div>
-              <label className="label">Quantity / Weight</label>
-              <input
-                className="input-field"
-                value={form.quantity_weight}
-                onChange={e => set('quantity_weight', e.target.value)}
-                placeholder="e.g. 50 pcs / 120 kg"
-              />
             </div>
 
           </div>
@@ -494,6 +421,67 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
             <p className="text-xs text-gray-400 dark:text-gray-500 mt-1.5">
               Item name & quantity ordered. Delivery quantities are tracked by the rig team after dispatch.
             </p>
+          </div>
+
+          {/* ── Additional details ──────────────────────────────────────────── */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
+            <div className="sm:col-span-2">
+              <label className="label">Material Description 2</label>
+              <textarea
+                className="input-field resize-none"
+                rows={2}
+                value={form.material_description_2}
+                onChange={e => set('material_description_2', e.target.value)}
+                placeholder="Additional description (optional)"
+              />
+            </div>
+
+            <div>
+              <label className="label">Promised Ready Date</label>
+              <input
+                type="date"
+                className="input-field"
+                value={form.promised_ready_date}
+                onChange={e => set('promised_ready_date', e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="label">Vendor Name (Company) <span className="text-red-500">*</span></label>
+              <VendorAutocomplete
+                value={form.vendor_name}
+                onChange={v => set('vendor_name', v)}
+                onSelect={vendor => setForm(f => ({
+                  ...f,
+                  vendor_name:         vendor.name,
+                  vendor_contact_name: vendor.contact_person || f.vendor_contact_name,
+                  vendor_phone_number: vendor.phone          || f.vendor_phone_number,
+                }))}
+                placeholder="Search or type vendor name"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="label">Vendor Contact Person Name</label>
+              <input
+                className="input-field"
+                value={form.vendor_contact_name}
+                onChange={e => set('vendor_contact_name', e.target.value)}
+                placeholder="Auto-fills from vendor"
+              />
+            </div>
+
+            <div>
+              <label className="label">Vendor Phone Number</label>
+              <input
+                type="tel"
+                className="input-field"
+                value={form.vendor_phone_number}
+                onChange={e => set('vendor_phone_number', e.target.value)}
+                placeholder="Auto-fills from vendor"
+              />
+            </div>
           </div>
 
           {error && (

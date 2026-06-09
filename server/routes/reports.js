@@ -1,5 +1,6 @@
 const router = require('express').Router()
 const { supabase } = require('../utils/supabaseAdmin')
+const { requireAuth } = require('../middleware/authMiddleware')
 
 function getDateRange(type) {
   const now = new Date()
@@ -10,7 +11,7 @@ function getDateRange(type) {
   return start.toISOString().split('T')[0]
 }
 
-router.get('/:type', async (req, res) => {
+router.get('/:type', requireAuth, async (req, res) => {
   const { type } = req.params
   const { rig } = req.query
   let q = supabase.from('po_orders').select('*').order('po_date', { ascending: false })

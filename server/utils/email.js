@@ -16,12 +16,35 @@ const transporter = nodemailer.createTransport({
   },
 })
 
+// ── Per-recipient throttle: max 10 emails / minute / address ──────────────────
+const THROTTLE_WINDOW_MS = 60 * 1000
+const THROTTLE_MAX = 10
+const _sendLog = new Map() // email -> number[] (timestamps within the window)
+
+function allowRecipient(email) {
+  const now = Date.now()
+  const arr = (_sendLog.get(email) || []).filter(t => now - t < THROTTLE_WINDOW_MS)
+  if (arr.length >= THROTTLE_MAX) {
+    _sendLog.set(email, arr)
+    return false
+  }
+  arr.push(now)
+  _sendLog.set(email, arr)
+  return true
+}
+
 /**
  * Core send helper. `to` may be a string or an array of strings.
  * Silently returns null if the recipient list is empty.
+ * Recipients over the per-minute throttle are skipped (logged, not thrown).
  */
 async function sendEmail({ to, subject, html }) {
-  const recipients = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean)
+  const all = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean)
+  const recipients = all.filter(addr => {
+    const ok = allowRecipient(addr)
+    if (!ok) console.warn(`[email] throttled (>${THROTTLE_MAX}/min): ${addr}`)
+    return ok
+  })
   if (!recipients.length) return null
   try {
     const info = await transporter.sendMail({
@@ -223,7 +246,8 @@ function statusChangedEmail(po, oldStatus, newStatus, updatedByName = 'System') 
  */
 function staleAlertEmail(pos, overdueDays = 45) {
   const rows = pos.map(po => {
-    const days = Math.floor((Date.now() - new Date(po.po_date).getTime()) / 86400000)
+    const base = po.promised_ready_date || po.po_date
+    const days = base ? Math.floor((Date.now() - new Date(base).getTime()) / 86400000) : 0
     return `<tr>
       <td style="padding:10px 14px;border-bottom:1px solid #fee2e2;font-size:13px;font-weight:600;color:#111827">${po.po_number || '&mdash;'}</td>
       <td style="padding:10px 14px;border-bottom:1px solid #fee2e2;font-size:13px;color:#374151">${po.rig_name || '&mdash;'}</td>
@@ -236,7 +260,7 @@ function staleAlertEmail(pos, overdueDays = 45) {
   const body = `
     <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px 18px;margin-bottom:22px">
       <p style="margin:0;font-size:14px;color:#991b1b;line-height:1.5">
-        &#9888;&#65039; <strong>${pos.length} Purchase Order${pos.length !== 1 ? 's have' : ' has'} exceeded <span style="color:#dc2626">${overdueDays} days</span> without delivery and require${pos.length === 1 ? 's' : ''} immediate attention.</strong>
+        &#9888;&#65039; <strong>${pos.length} Purchase Order${pos.length !== 1 ? 's are' : ' is'} more than <span style="color:#dc2626">${overdueDays} days past the promised ready date</span> and require${pos.length === 1 ? 's' : ''} immediate attention.</strong>
       </p>
     </div>
 
@@ -247,7 +271,7 @@ function staleAlertEmail(pos, overdueDays = 45) {
           <th style="padding:10px 14px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.6px;color:#7f1d1d;font-weight:600">Rig</th>
           <th style="padding:10px 14px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.6px;color:#7f1d1d;font-weight:600">Vendor</th>
           <th style="padding:10px 14px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.6px;color:#7f1d1d;font-weight:600">Current Status</th>
-          <th style="padding:10px 14px;text-align:center;font-size:11px;text-transform:uppercase;letter-spacing:0.6px;color:#7f1d1d;font-weight:600">Days Elapsed</th>
+          <th style="padding:10px 14px;text-align:center;font-size:11px;text-transform:uppercase;letter-spacing:0.6px;color:#7f1d1d;font-weight:600">Days Past Promised</th>
         </tr>
       </thead>
       <tbody style="background:#ffffff">${rows}</tbody>

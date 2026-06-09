@@ -35,7 +35,26 @@ export const LOGISTICS_CODES = [
 
 export const DELIVERY_MODES = ['Vendor Delivery', 'JDIL Pickup']
 
-export const TRANSPORT_MODES = ['Road', 'Air', 'Sea', 'Courier']
+// Mode of Transport — CHANGE 4 (OSV / CCB / CCC / Road-Courier)
+export const TRANSPORT_MODES = ['OSV', 'CCB', 'CCC', 'Road/Courier']
+
+// Dispatch location (5 options incl. Rig) — used for Material Dispatch Location
+export const LOCATION_OPTIONS = ['BKC', 'Taloja', 'Nagothane', 'Nhava', 'Rig']
+
+// Received location (4 hub options, NO Rig) — used for Material Received Location
+export const LOCATION_OPTIONS_NO_RIG = ['BKC', 'Taloja', 'Nagothane', 'Nhava']
+
+// Rig "Remarks" dropdown options (CHANGE 7) — free-text details go in Other Remarks
+export const RIG_REMARKS_OPTIONS = [
+  'Full Material Received',
+  'Partial Material Received',
+  'Material Received PO/DC yet to Receive',
+  'Quality Issue',
+  'Wrong Supply',
+  'Short Supply',
+  'Received in Damaged Condition',
+  'Others',
+]
 
 export const ROLES = ['purchase', 'logistics', 'rig', 'admin', 'csuite']
 
@@ -44,10 +63,9 @@ export const PO_STATUSES = [
   'PO Released',
   'Buyer Assigned',
   'Vendor Confirmed',
-  'Material Ready at Vendor',
-  'Dispatched from Vendor',
-  'In Transit to JDIL',
   'At JDIL Location',
+  'Dispatched from JDIL',
+  'In Transit to JDIL',
   'In Transit to Rig',
   'Delivered to Rig',
 ]
@@ -57,10 +75,9 @@ export const STATUS_COLORS = {
   'PO Released':              'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
   'Buyer Assigned':           'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300',
   'Vendor Confirmed':         'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300',
-  'Material Ready at Vendor': 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300',
-  'Dispatched from Vendor':   'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
   'In Transit to JDIL':       'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
   'At JDIL Location':         'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300',
+  'Dispatched from JDIL':     'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300',
   'In Transit to Rig':        'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300',
   'Delivered to Rig':         'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
 }

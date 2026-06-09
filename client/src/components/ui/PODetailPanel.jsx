@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { calcStatus, daysElapsed, formatDate } from '../../utils/helpers'
-import { PO_RIG_OPTIONS, BUYER_CODES, DELIVERY_MODES, TRANSPORT_MODES, OVERDUE_DAYS } from '../../utils/constants'
+import { PO_RIG_OPTIONS, BUYER_CODES, DELIVERY_MODES, TRANSPORT_MODES, LOCATION_OPTIONS, LOCATION_OPTIONS_NO_RIG, RIG_REMARKS_OPTIONS, OVERDUE_DAYS } from '../../utils/constants'
 import { canEditField, hasAnyEditableField } from '../../utils/fieldPermissions'
 import { StatusPill, PipelineDots } from './StatusPill'
 import { generateSinglePOReport } from '../../utils/pdfReports'
@@ -25,41 +25,42 @@ const FIELD_SECTIONS = [
     key: 'purchase',
     label: 'Purchase Details',
     fields: [
-      { key: 'mr_number',             label: 'MR Number',              type: 'text' },
-      { key: 'po_number',             label: 'PO Number',              type: 'text' },
-      { key: 'po_date',               label: 'PO Date',                type: 'date' },
-      { key: 'promised_ready_date',   label: 'Promised Ready Date',    type: 'date' },
-      { key: 'rig_name',              label: 'Rig / Location',         type: 'select', options: PO_RIG_OPTIONS },
-      { key: 'vendor_name',           label: 'Vendor',                 type: 'text' },
-      { key: 'vendor_contact_name',   label: 'Vendor Contact Name',    type: 'text' },
-      { key: 'vendor_phone_number',   label: 'Vendor Phone Number',    type: 'text' },
-      { key: 'buyer_code',            label: 'Buyer Code',             type: 'select', options: BUYER_CODES },
-      { key: 'material_description',  label: 'Material Description',   type: 'textarea' },
-      { key: 'material_description_2',label: 'Material Description 2', type: 'textarea' },
-      { key: 'quantity_weight',       label: 'Quantity / Weight',      type: 'text' },
-      { key: 'delivery_mode',         label: 'Delivery Mode',          type: 'select', options: DELIVERY_MODES },
+      { key: 'mr_number',             label: 'MR Number',                  type: 'text' },
+      { key: 'po_number',             label: 'PO Number',                  type: 'text' },
+      { key: 'po_date',               label: 'PO Date',                    type: 'date' },
+      { key: 'rig_name',              label: 'Rig / Location',             type: 'select', options: PO_RIG_OPTIONS },
+      { key: 'delivery_mode',         label: 'Delivery Mode',              type: 'select', options: DELIVERY_MODES },
+      { key: 'buyer_code',            label: 'Buyer Code',                 type: 'select', options: BUYER_CODES },
+      { key: 'material_description_2',label: 'Material Description 2',      type: 'textarea' },
+      { key: 'promised_ready_date',   label: 'Promised Ready Date',        type: 'date' },
+      { key: 'vendor_name',           label: 'Vendor Name (Company)',      type: 'text' },
+      { key: 'vendor_contact_name',   label: 'Vendor Contact Person Name', type: 'text' },
+      { key: 'vendor_phone_number',   label: 'Vendor Phone Number',        type: 'text' },
     ],
   },
   {
     key: 'logistics',
     label: 'Logistics Details',
     fields: [
-      // Issue 3: "Material Collection Date" → DATE, stored in vendor_confirmed_date column
-      { key: 'vendor_confirmed_date',        label: 'Material Collection Date',     type: 'date' },
-      // Issue 3: "Material Collection Location" → TEXT, stored in dedicated material_collection_location column
-      { key: 'material_collection_location', label: 'Material Collection Location', type: 'text' },
-      { key: 'dispatch_date',                label: 'Dispatch Date',                type: 'date' },
-      // Issue 6: DC fields — filtered per team_code in render (see showField())
-      { key: 'dc_number_bkc',               label: 'DC Number (BKC)',              type: 'text' },
-      { key: 'dc_number_taloja',            label: 'DC Number (Taloja)',           type: 'text' },
-      { key: 'dc_number_nagothane',         label: 'DC Number (Nagothane)',        type: 'text' },
-      { key: 'dc_number_nhava',             label: 'DC Number (Nhava)',            type: 'text' },
-      // Issue 5: new logistics fields
-      { key: 'mode_of_transport',           label: 'Mode of Transport',            type: 'select', options: TRANSPORT_MODES },
-      // Issue 5: renamed label
-      { key: 'transporter_details',         label: 'Transporter Detail',           type: 'text' },
-      { key: 'jdil_location',               label: 'JDIL Location',               type: 'text' },
-      { key: 'in_transit_rig_date',         label: 'In Transit to Rig Date',      type: 'date' },
+      // Material Collection Date/Location removed from UI (DB columns retained for history)
+      // 1 & 2. Material Received Date + Location (4 hub options, no Rig)
+      { key: 'material_received_date',       label: 'Material Received Date',       type: 'date' },
+      { key: 'material_received_location',   label: 'Material Received Location',    type: 'select', options: LOCATION_OPTIONS_NO_RIG },
+      // 3–6. DC Numbers (BKC, Taloja, Nhava, Nagothane) — filtered per team_code in render
+      { key: 'dc_number_bkc',                label: 'DC Number (BKC)',              type: 'text' },
+      { key: 'dc_number_taloja',             label: 'DC Number (Taloja)',           type: 'text' },
+      { key: 'dc_number_nhava',              label: 'DC Number (Nhava)',            type: 'text' },
+      { key: 'dc_number_nagothane',          label: 'DC Number (Nagothane)',        type: 'text' },
+      // 7. Material Dispatch Date (db column stays dispatch_date)
+      { key: 'dispatch_date',                label: 'Material Dispatch Date',       type: 'date' },
+      // 8. Material Dispatch Location — 5 options incl. Rig (db column stays jdil_location)
+      { key: 'jdil_location',                label: 'Material Dispatch Location',   type: 'select', options: LOCATION_OPTIONS },
+      // 9. Mode of Transport
+      { key: 'mode_of_transport',            label: 'Mode of Transport',            type: 'select', options: TRANSPORT_MODES },
+      // 10. Transporter Detail
+      { key: 'transporter_details',          label: 'Transporter Detail',           type: 'text' },
+      // 11. In Transit to Rig/JDIL Location Date (column stays in_transit_rig_date)
+      { key: 'in_transit_rig_date',          label: 'In Transit to Rig/JDIL Location Date', type: 'date' },
     ],
   },
   {
@@ -73,7 +74,8 @@ const FIELD_SECTIONS = [
     key: 'remarks',
     label: 'Remarks',
     fields: [
-      { key: 'remarks',       label: 'Remarks',       type: 'textarea' },
+      // CHANGE 7: Remarks is now a dropdown (rig + admin editable); details go in Other Remarks
+      { key: 'remarks',       label: 'Remarks',       type: 'select', options: RIG_REMARKS_OPTIONS },
       { key: 'other_remarks', label: 'Other Remarks', type: 'textarea' },
     ],
   },
@@ -153,6 +155,22 @@ export default function PODetailPanel({ po, onClose, onSave }) {
     if (po?.id) { setItemsError(''); setItemsMsg(''); loadLineItems() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [po?.id])
+
+  // Warn before tab close / reload if there are unsaved field or delivery edits
+  useEffect(() => {
+    const itemsDirty = lineItems.some(it =>
+      (itemDeliveries[it.id] ?? String(it.quantity_delivered ?? 0)) !== String(it.quantity_delivered ?? 0)
+    )
+    const dirty = Object.keys(pendingChanges).length > 0 || itemsDirty
+    if (!dirty) return
+    function onBeforeUnload(e) {
+      e.preventDefault()
+      e.returnValue = 'You have unsaved changes. Are you sure you want to leave?'
+      return e.returnValue
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [pendingChanges, lineItems, itemDeliveries])
 
   async function handleDownloadPDF() {
     setPdfLoading(true)

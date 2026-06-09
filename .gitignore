@@ -5,6 +5,7 @@ server/node_modules/
 
 # ── Environment variables (NEVER commit secrets) ─────────────────────────────
 .env
+.env*
 .env.local
 .env.*.local
 client/.env
@@ -12,6 +13,9 @@ client/.env.local
 client/.env.production
 server/.env
 server/.env.local
+# …but DO keep the committed example templates
+!.env.example
+!**/.env.example
 
 # ── Build output ─────────────────────────────────────────────────────────────
 dist/

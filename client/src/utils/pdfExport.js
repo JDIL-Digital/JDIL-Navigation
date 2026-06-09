@@ -81,16 +81,17 @@ export function generatePDF(type, orders, profile) {
     })
 
     const logistics = [
-      ['Vendor Confirmed Date', formatDate(po.vendor_confirmed_date)],
-      ['Material Ready Date', formatDate(po.material_ready_date)],
-      ['Dispatch Date', formatDate(po.dispatch_date)],
+      ['Material Received Date', formatDate(po.material_received_date)],
+      ['Material Received Location', po.material_received_location || '—'],
       ['DC Number (BKC)', po.dc_number_bkc || '—'],
       ['DC Number (Taloja)', po.dc_number_taloja || '—'],
-      ['DC Number (Nagothane)', po.dc_number_nagothane || '—'],
       ['DC Number (Nhava)', po.dc_number_nhava || '—'],
-      ['Transporter Details', po.transporter_details || '—'],
-      ['JDIL Location', po.jdil_location || '—'],
-      ['In Transit to Rig Date', formatDate(po.in_transit_rig_date)],
+      ['DC Number (Nagothane)', po.dc_number_nagothane || '—'],
+      ['Material Dispatch Date', formatDate(po.dispatch_date)],
+      ['Material Dispatch Location', po.jdil_location || '—'],
+      ['Mode of Transport', po.mode_of_transport || '—'],
+      ['Transporter Detail', po.transporter_details || '—'],
+      ['In Transit to Rig/JDIL Location Date', formatDate(po.in_transit_rig_date)],
       ['Delivered to Rig Date', formatDate(po.delivered_to_rig_date)],
       ['Remarks', po.remarks || '—'],
     ]

@@ -1,4 +1,4 @@
-import { calcStatus, daysElapsed, formatDate } from '../../utils/helpers'
+import { calcStatus, daysElapsed, overdueDays, formatDate } from '../../utils/helpers'
 import { OVERDUE_DAYS } from '../../utils/constants'
 import { StatusPill, PipelineDots } from './StatusPill'
 
@@ -9,7 +9,7 @@ export default function POTable({ orders, onRowClick, visibleColumns = 'purchase
         <thead>
           <tr className="border-b border-gray-200 dark:border-gray-800">
             <th className="table-header rounded-tl-lg">PO / MR</th>
-            <th className="table-header">Rig</th>
+            <th className="table-header">Collection Date</th>
             {/* Hide on mobile */}
             <th className="table-header hidden sm:table-cell">Vendor</th>
             <th className="table-header hidden md:table-cell">Material</th>
@@ -28,10 +28,7 @@ export default function POTable({ orders, onRowClick, visibleColumns = 'purchase
               </>
             )}
             {visibleColumns === 'purchase' && (
-              <>
-                <th className="table-header hidden sm:table-cell">Promise Date</th>
-                <th className="table-header">Days</th>
-              </>
+              <th className="table-header">Days</th>
             )}
             <th className="table-header rounded-tr-lg hidden sm:table-cell">Updated</th>
           </tr>
@@ -47,7 +44,7 @@ export default function POTable({ orders, onRowClick, visibleColumns = 'purchase
             orders.map(po => {
               const status = calcStatus(po)
               const days   = daysElapsed(po.po_date)
-              const isStale = days > OVERDUE_DAYS && status !== 'Delivered to Rig'
+              const isStale = overdueDays(po) > OVERDUE_DAYS && status !== 'Delivered to Rig'
               return (
                 <tr
                   key={po.id}
@@ -59,8 +56,8 @@ export default function POTable({ orders, onRowClick, visibleColumns = 'purchase
                     <p className="font-medium text-gray-900 dark:text-gray-100 text-xs">{po.po_number}</p>
                     <p className="text-gray-400 dark:text-gray-500 text-xs">{po.mr_number}</p>
                   </td>
-                  {/* Rig — always visible */}
-                  <td className="table-cell text-xs">{po.rig_name}</td>
+                  {/* Collection Date (promised_ready_date) — always visible, DD-MM-YYYY */}
+                  <td className="table-cell text-xs">{formatDate(po.promised_ready_date)}</td>
                   {/* Vendor — hidden on mobile */}
                   <td className="table-cell hidden sm:table-cell">
                     <span className="text-xs truncate max-w-[120px] block">{po.vendor_name}</span>
@@ -91,14 +88,11 @@ export default function POTable({ orders, onRowClick, visibleColumns = 'purchase
                     </>
                   )}
                   {visibleColumns === 'purchase' && (
-                    <>
-                      <td className="table-cell text-xs hidden sm:table-cell">{formatDate(po.promised_ready_date)}</td>
-                      <td className="table-cell">
-                        <span className={`text-xs font-semibold ${isStale ? 'text-red-600 dark:text-red-400' : 'text-gray-600 dark:text-gray-400'}`}>
-                          {days}d {isStale ? '⚠' : ''}
-                        </span>
-                      </td>
-                    </>
+                    <td className="table-cell">
+                      <span className={`text-xs font-semibold ${isStale ? 'text-red-600 dark:text-red-400' : 'text-gray-600 dark:text-gray-400'}`}>
+                        {days}d {isStale ? '⚠' : ''}
+                      </span>
+                    </td>
                   )}
                   {/* Updated — hidden on mobile */}
                   <td className="table-cell text-xs text-gray-400 dark:text-gray-500 hidden sm:table-cell">

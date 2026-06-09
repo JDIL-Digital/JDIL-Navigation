@@ -4,22 +4,39 @@ const path    = require('path')
 const cron    = require('node-cron')
 require('dotenv').config()
 
+const { generalLimiter, authLimiter } = require('./middleware/rateLimit')
+
 const app  = express()
 const PORT = process.env.PORT || 3001
 const IS_PROD = process.env.NODE_ENV === 'production'
 
+// Behind Replit's proxy — needed so req.ip reflects the real client IP for
+// rate limiting (otherwise every request looks like it comes from the proxy).
+app.set('trust proxy', 1)
+
 // ── CORS ──────────────────────────────────────────────────────────────────────
-// In production the React build is served by this same Express process,
-// so browser requests are same-origin and CORS headers aren't needed.
-// We only restrict to localhost origins in development.
+// Allow only known origins. Requests with no Origin header (same-origin browser
+// navigations, server-to-server, curl) are permitted; everything else is blocked.
+const ALLOWED_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:4173',
+  'https://jdil-navigation.replit.app',
+]
 app.use(cors({
-  origin: IS_PROD
-    ? false                                           // same-origin; no CORS header needed
-    : ['http://localhost:5173', 'http://localhost:4173'],
+  origin(origin, cb) {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true)
+    return cb(new Error(`Origin ${origin} not allowed by CORS`))
+  },
   credentials: true,
 }))
 
-app.use(express.json())
+// Cap request body size to prevent oversized-payload abuse.
+app.use(express.json({ limit: '1mb' }))
+
+// ── Rate limiting ───────────────────────────────────────────────────────────
+// General cap on all API traffic; stricter cap on the public registration ping.
+app.use('/api', generalLimiter)
+app.use('/api/users/register-notify', authLimiter)
 
 // ── API routes ────────────────────────────────────────────────────────────────
 const poRoutes     = require('./routes/po')
@@ -54,10 +71,34 @@ if (IS_PROD) {
   console.log(`[server] Serving React build from ${clientDist}`)
 }
 
+// ── Global error handler ──────────────────────────────────────────────────────
+// Catches synchronous throws and anything passed to next(err) so a single bad
+// request returns a clean 500 instead of crashing the process.
+app.use((err, _req, res, _next) => {
+  if (err && /not allowed by CORS/i.test(err.message || '')) {
+    return res.status(403).json({ error: 'Origin not allowed' })
+  }
+  console.error('[server] Unhandled route error:', err)
+  if (res.headersSent) return
+  res.status(500).json({ error: 'Internal server error' })
+})
+
 // ── Stale PO checker — runs every day at 8 am ─────────────────────────────────
 cron.schedule('0 8 * * *', async () => {
-  const { checkStaleOrders } = require('./utils/staleChecker')
-  await checkStaleOrders()
+  try {
+    const { checkStaleOrders } = require('./utils/staleChecker')
+    await checkStaleOrders()
+  } catch (e) {
+    console.error('[cron] stale checker error:', e)
+  }
+})
+
+// ── Process-level safety nets — never exit on a stray async error ─────────────
+process.on('unhandledRejection', reason => {
+  console.error('[process] Unhandled promise rejection:', reason)
+})
+process.on('uncaughtException', err => {
+  console.error('[process] Uncaught exception:', err)
 })
 
 app.listen(PORT, () => {

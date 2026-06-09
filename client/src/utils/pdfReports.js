@@ -19,14 +19,14 @@ const MARGIN   = 10           // mm — page left/right margin
 const MONTHS   = ['January','February','March','April','May','June',
                   'July','August','September','October','November','December']
 
-// Short stage names for pipeline visual (10 stages)
+// Short stage names for pipeline visual (must stay index-aligned with PO_STATUSES — 9 stages)
 const STAGE_ABBR = [
-  'MR', 'PO', 'Buyer', 'Conf', 'Matl Rdy',
-  'Dispatch', 'JDIL Transit', 'At JDIL', 'Rig Transit', 'Delivered',
+  'MR', 'PO', 'Buyer', 'Conf', 'At JDIL',
+  'Disp JDIL', 'JDIL Transit', 'Rig Transit', 'Delivered',
 ]
 
 // Bar-chart labels (even shorter — must fit in ~7 mm)
-const STAGE_BAR_LABEL = ['MR', 'PO', 'Buyer', 'Conf', 'Matl', 'Disp', 'J-Tran', 'AtJDIL', 'R-Tran', 'Deliv']
+const STAGE_BAR_LABEL = ['MR', 'PO', 'Buyer', 'Conf', 'AtJDIL', 'DispJDIL', 'J-Tran', 'R-Tran', 'Deliv']
 
 // Donut colour palette (RGB arrays — matches dashboard hex colours exactly)
 const DONUT_COLORS = {
@@ -228,13 +228,9 @@ function drawPipeline(doc, status, y) {
   return y + boxH + 10
 }
 
-/** Opens the PDF in a new browser tab. Falls back to .save() if popup blocked. */
+/** Saves the PDF to disk with the given filename (native browser download). */
 function openPDF(doc, filename) {
-  const blob = doc.output('blob')
-  const url  = URL.createObjectURL(blob)
-  const win  = window.open(url, '_blank')
-  if (!win) doc.save(filename)
-  setTimeout(() => URL.revokeObjectURL(url), 15000)
+  doc.save(filename)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -720,17 +716,17 @@ export async function generateSinglePOReport(po, auditLog = [], lineItems = []) 
     startY: y,
     margin: { left: MARGIN, right: MARGIN, top: HEADER_H + 10, bottom: 18 },
     body: [
-      ['Material Collection Date',     formatDate(po.vendor_confirmed_date)],
-      ['Material Collection Location', po.material_collection_location || '—'],
-      ['Dispatch Date',                formatDate(po.dispatch_date)],
+      ['Material Received Date',       formatDate(po.material_received_date)],
+      ['Material Received Location',   po.material_received_location || '—'],
       ['DC Number (BKC)',              po.dc_number_bkc       || '—'],
       ['DC Number (Taloja)',           po.dc_number_taloja    || '—'],
-      ['DC Number (Nagothane)',        po.dc_number_nagothane || '—'],
       ['DC Number (Nhava)',            po.dc_number_nhava     || '—'],
+      ['DC Number (Nagothane)',        po.dc_number_nagothane || '—'],
+      ['Material Dispatch Date',       formatDate(po.dispatch_date)],
+      ['Material Dispatch Location',   po.jdil_location       || '—'],
       ['Mode of Transport',            po.mode_of_transport   || '—'],
       ['Transporter Detail',           po.transporter_details || '—'],
-      ['JDIL Location',                po.jdil_location       || '—'],
-      ['In Transit to Rig Date',       formatDate(po.in_transit_rig_date)],
+      ['In Transit to Rig/JDIL Location Date', formatDate(po.in_transit_rig_date)],
     ],
     theme: 'grid',
     styles: { fontSize: 8.5, cellPadding: 2.5 },
@@ -797,7 +793,7 @@ export async function generateSinglePOReport(po, auditLog = [], lineItems = []) 
   }
 
   addFooters(doc)
-  openPDF(doc, `JDIL_PO_${(po.po_number || 'detail').replace(/\//g, '-')}_${new Date().toISOString().slice(0, 10)}.pdf`)
+  openPDF(doc, `JDIL_Navigation_PO_${(po.po_number || 'detail').replace(/\//g, '-')}_${new Date().toISOString().slice(0, 10)}.pdf`)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -872,7 +868,7 @@ export async function generateWeeklyReport(orders) {
   }
 
   addFooters(doc)
-  openPDF(doc, `JDIL_Weekly_${now.toISOString().slice(0, 10)}.pdf`)
+  openPDF(doc, `JDIL_Navigation_Weekly_Report_${now.toISOString().slice(0, 10)}.pdf`)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -986,7 +982,7 @@ export async function generateMonthlyReport(orders) {
   }
 
   addFooters(doc)
-  openPDF(doc, `JDIL_Monthly_${monthName.replace(' ', '_')}.pdf`)
+  openPDF(doc, `JDIL_Navigation_Monthly_${monthName.replace(/ /g, '_')}.pdf`)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1112,5 +1108,5 @@ export async function generateQuarterlyReport(orders) {
   }
 
   addFooters(doc)
-  openPDF(doc, `JDIL_Quarterly_${qLabel.replace(' ', '_')}.pdf`)
+  openPDF(doc, `JDIL_Navigation_${qLabel.replace(/ /g, '_')}.pdf`)
 }

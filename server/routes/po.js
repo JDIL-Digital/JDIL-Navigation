@@ -2,7 +2,8 @@ const router = require('express').Router()
 const { supabase }                            = require('../utils/supabaseAdmin')
 const { requireAuth }                         = require('../middleware/authMiddleware')
 const { validateUpdateFields, canCreatePO, SYSTEM_FIELDS } = require('../utils/fieldPermissions')
-const { calcStatus, daysElapsed }             = require('../utils/poHelpers')
+const { validateFieldLengths } = require('../utils/validate')
+const { calcStatus, daysElapsed, overdueDays } = require('../utils/poHelpers')
 const {
   sendEmail,
   newPOEmail,
@@ -16,11 +17,10 @@ const OVERDUE_DAYS = 45
 // Entering a LOGISTICS stage from a PURCHASE stage → notify logistics team
 // Entering a RIG stage from a LOGISTICS stage     → notify rig users for that rig
 const PURCHASE_STAGES  = new Set([
-  'MR Created', 'PO Released', 'Buyer Assigned',
-  'Vendor Confirmed', 'Material Ready at Vendor', 'Dispatched from Vendor',
+  'MR Created', 'PO Released', 'Buyer Assigned', 'Vendor Confirmed',
 ])
 const LOGISTICS_STAGES = new Set([
-  'In Transit to JDIL', 'At JDIL Location', 'In Transit to Rig',
+  'In Transit to JDIL', 'At JDIL Location', 'Dispatched from JDIL', 'In Transit to Rig',
 ])
 const RIG_STAGES = new Set(['Delivered to Rig'])
 
@@ -79,11 +79,15 @@ router.post('/', requireAuth, async (req, res) => {
     })
   }
 
+  // Enforce max text-field lengths
+  const lenCheck = validateFieldLengths(body)
+  if (!lenCheck.ok) return res.status(400).json({ error: lenCheck.error })
+
   body.created_by   = req.user.id
   body.updated_at   = new Date().toISOString()
   body.status       = calcStatus(body)
   body.days_elapsed = daysElapsed(body.po_date)
-  body.is_stale     = body.days_elapsed > OVERDUE_DAYS
+  body.is_stale     = overdueDays(body) > OVERDUE_DAYS
 
   const { data, error } = await supabase.from('po_orders').insert(body).select().single()
   if (error) return res.status(400).json({ error: error.message })
@@ -150,6 +154,10 @@ router.patch('/:id', requireAuth, async (req, res) => {
     })
   }
 
+  // Enforce max text-field lengths
+  const lenCheck = validateFieldLengths(sanitised)
+  if (!lenCheck.ok) return res.status(400).json({ error: lenCheck.error })
+
   // Admin requires a reason
   if (req.user.role === 'admin' && !reason?.trim()) {
     return res.status(400).json({ error: 'Admin must provide a reason for every change' })
@@ -179,7 +187,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
     ...sanitised,
     status:       newStatus,
     days_elapsed: newElapsed,
-    is_stale:     newElapsed > OVERDUE_DAYS,
+    is_stale:     overdueDays(merged) > OVERDUE_DAYS,
     updated_at:   new Date().toISOString(),
   }
 
