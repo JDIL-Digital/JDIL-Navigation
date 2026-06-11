@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
+// Mobile devices typically have no "original window" to return to, and
+// window.close() doesn't work on tabs not opened by JavaScript (e.g. Safari).
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+
 /**
  * Magic-link landing page.
  *
@@ -20,8 +24,14 @@ export default function AuthCallback() {
     function finish() {
       if (finished) return
       finished = true
-      // Attempt auto-close. Succeeds for script-opened tabs / no-history tabs;
-      // otherwise it's a silent no-op and the fallback message below shows.
+      // On mobile there's no original window to return to and window.close()
+      // won't work — just go straight into the app on this same tab.
+      if (isMobile) {
+        window.location.href = '/'
+        return
+      }
+      // Desktop: attempt auto-close. Succeeds for script-opened tabs / no-history
+      // tabs; otherwise it's a silent no-op and the fallback message below shows.
       try { window.close() } catch { /* ignore */ }
       // If we're still here a moment later, the browser blocked the close.
       setTimeout(() => setStatus('done'), 400)
