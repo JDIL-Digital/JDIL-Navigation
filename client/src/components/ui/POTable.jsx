@@ -62,9 +62,10 @@ export default function POTable({ orders, onRowClick, visibleColumns = 'purchase
                   <td className="table-cell hidden sm:table-cell">
                     <span className="text-xs truncate max-w-[120px] block">{po.vendor_name}</span>
                   </td>
-                  {/* Material — hidden on mobile+tablet */}
+                  {/* Material — hidden on mobile+tablet. Falls back to
+                      material_description_2 for historical POs (no line items). */}
                   <td className="table-cell hidden md:table-cell">
-                    <span className="text-xs truncate max-w-[140px] block">{po.material_description}</span>
+                    <span className="text-xs truncate max-w-[140px] block">{po.material_description || po.material_description_2}</span>
                   </td>
                   {/* Status — always visible */}
                   <td className="table-cell">
