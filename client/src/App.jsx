@@ -13,13 +13,17 @@ import RigPage from './pages/RigPage'
 import AdminPage from './pages/AdminPage'
 import AdminLoginPage from './pages/AdminLoginPage'
 import AuthCallback from './pages/AuthCallback'
+import ForgotPasswordPage from './pages/ForgotPasswordPage'
+import ResetPasswordPage from './pages/ResetPasswordPage'
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, profile, loading, profileLoading } = useAuth()
-  // Only block on profileLoading if we actually have a user — avoids hanging
-  // the spinner for unauthenticated bookmarked URLs waiting on a profile that
-  // will never load.
-  if (loading || (profileLoading && !!user)) return <div className="flex items-center justify-center h-screen"><Spinner /></div>
+  // Only block on the INITIAL profile load (when we don't yet have a profile).
+  // A background re-fetch — e.g. Supabase refreshing the token when the tab
+  // regains focus — must NOT replace the page with a spinner, or it would
+  // unmount the whole app subtree and lose transient UI state like an open
+  // "New PO" panel. Once we have a profile, keep rendering during re-fetches.
+  if (loading || (profileLoading && !!user && !profile)) return <div className="flex items-center justify-center h-screen"><Spinner /></div>
   if (!user) return <Navigate to="/login" replace />
   if (!profile?.is_active) return <Navigate to="/pending" replace />
   if (allowedRoles && !allowedRoles.includes(profile?.role)) return <Navigate to="/" replace />
@@ -53,6 +57,10 @@ function AppRoutes() {
       {/* Magic-link landing — always renders (no auth-state redirect) so it can
           confirm the session and self-close the tab. */}
       <Route path="/auth/callback" element={<AuthCallback />} />
+
+      {/* Public password-reset flow */}
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
 
       <Route path="/" element={
         <ProtectedRoute>

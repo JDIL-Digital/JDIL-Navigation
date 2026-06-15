@@ -6,6 +6,7 @@ import { useNotifications } from '../../context/NotificationContext'
 import { useAuth } from '../../context/AuthContext'
 import jindalLogo from '../../assets/Jindal_Logo.jpg'
 import ChatbotWidget from '../ui/ChatbotWidget'
+import IdleTimeout from '../IdleTimeout'
 
 // Bottom-nav items — mirrors the sidebar's role-based filter
 const BOTTOM_NAV = [
@@ -152,6 +153,9 @@ export default function Layout() {
 
       {/* Floating help assistant — every page, after login */}
       <ChatbotWidget />
+
+      {/* Auto-logout after inactivity (only active while authenticated) */}
+      <IdleTimeout />
     </div>
   )
 }

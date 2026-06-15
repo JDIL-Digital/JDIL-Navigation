@@ -205,6 +205,12 @@ export default function AdminLoginPage() {
                   </div>
                 </div>
 
+                <div className="text-right -mt-1">
+                  <Link to="/forgot-password" className="text-sm text-jdil-green hover:text-jdil-green-dark font-medium">
+                    Forgot password?
+                  </Link>
+                </div>
+
                 {error && (
                   <div className="bg-red-950/50 border border-red-800/60 text-red-400 text-sm rounded-lg px-4 py-3">
                     {error}
