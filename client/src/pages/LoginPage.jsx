@@ -17,6 +17,23 @@ export default function LoginPage() {
   const [error, setError]       = useState('')
   const [loading, setLoading]   = useState(false)
   const [showPwd, setShowPwd]   = useState(false)
+  const [idleBanner, setIdleBanner] = useState(false)
+
+  // Show the "logged out due to inactivity" banner if we were redirected here
+  // by the idle-timeout. Auto-dismisses after 10s; clears the flag immediately.
+  useEffect(() => {
+    let cleared = false
+    try {
+      if (sessionStorage.getItem('jdil-idle-logout')) {
+        sessionStorage.removeItem('jdil-idle-logout')
+        setIdleBanner(true)
+        cleared = true
+      }
+    } catch { /* ignore */ }
+    if (!cleared) return
+    const t = setTimeout(() => setIdleBanner(false), 10000)
+    return () => clearTimeout(t)
+  }, [])
 
   // OTP step
   const [step, setStep]         = useState('form')   // 'form' | 'otp'
@@ -134,6 +151,20 @@ export default function LoginPage() {
       </button>
 
       <div className="w-full max-w-md">
+        {idleBanner && (
+          <div className="mb-4 flex items-start justify-between gap-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/50 text-amber-800 dark:text-amber-300 text-sm rounded-lg px-4 py-3">
+            <span>You were logged out due to inactivity. Please sign in again.</span>
+            <button
+              onClick={() => setIdleBanner(false)}
+              className="shrink-0 text-amber-500 hover:text-amber-700 dark:hover:text-amber-200"
+              aria-label="Dismiss"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
         <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl border border-gray-200 dark:border-gray-800 p-8">
 
           {/* Logo */}
@@ -191,6 +222,12 @@ export default function LoginPage() {
                       )}
                     </button>
                   </div>
+                </div>
+
+                <div className="text-right -mt-2">
+                  <Link to="/forgot-password" className="text-sm text-jdil-green hover:text-jdil-green-dark font-medium">
+                    Forgot password?
+                  </Link>
                 </div>
 
                 {error && (
