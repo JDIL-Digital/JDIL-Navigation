@@ -1,9 +1,11 @@
 import { STATUS_COLORS, PO_STATUSES } from '../../utils/constants'
 
-export function StatusPill({ status }) {
+export function StatusPill({ status, label }) {
+  // Colour comes from the pipeline `status`; `label` (if given) overrides the
+  // visible text — e.g. "In Transit to Nhava" while still coloured as transit.
   return (
     <span className={`status-pill ${STATUS_COLORS[status] || 'bg-gray-100 text-gray-600'}`}>
-      {status}
+      {label || status}
     </span>
   )
 }

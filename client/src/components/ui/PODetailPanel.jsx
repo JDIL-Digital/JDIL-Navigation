@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
-import { calcStatus, daysElapsed, formatDate } from '../../utils/helpers'
-import { PO_RIG_OPTIONS, BUYER_CODES, DELIVERY_MODES, TRANSPORT_MODES, LOCATION_OPTIONS, LOCATION_OPTIONS_NO_RIG, RIG_REMARKS_OPTIONS, OVERDUE_DAYS } from '../../utils/constants'
+import { calcStatus, getDisplayStatus, daysElapsed, formatDate } from '../../utils/helpers'
+import { PO_RIG_OPTIONS, BUYER_CODES, DELIVERY_MODES, TRANSPORT_MODES, LOCATION_OPTIONS_NO_RIG, DISPATCH_LOCATION_OPTIONS, LOGISTICS_TEAM_CODES, RIG_REMARKS_OPTIONS, OVERDUE_DAYS } from '../../utils/constants'
 import { canEditField, hasAnyEditableField } from '../../utils/fieldPermissions'
 import { StatusPill, PipelineDots } from './StatusPill'
 import { generateSinglePOReport } from '../../utils/pdfReports'
@@ -53,14 +53,16 @@ const FIELD_SECTIONS = [
       { key: 'dc_number_nagothane',          label: 'DC Number (Nagothane)',        type: 'text' },
       // 7. Material Dispatch Date (db column stays dispatch_date)
       { key: 'dispatch_date',                label: 'Material Dispatch Date',       type: 'date' },
-      // 8. Material Dispatch Location — 5 options incl. Rig (db column stays jdil_location)
-      { key: 'jdil_location',                label: 'Material Dispatch Location',   type: 'select', options: LOCATION_OPTIONS },
+      // 8. Material Dispatch Location — 17 options (hubs + rigs incl. DD variants)
+      { key: 'jdil_location',                label: 'Material Dispatch Location',   type: 'select', options: DISPATCH_LOCATION_OPTIONS },
       // 9. Mode of Transport
       { key: 'mode_of_transport',            label: 'Mode of Transport',            type: 'select', options: TRANSPORT_MODES },
       // 10. Transporter Detail
       { key: 'transporter_details',          label: 'Transporter Detail',           type: 'text' },
       // 11. In Transit to Rig/JDIL Location Date (column stays in_transit_rig_date)
       { key: 'in_transit_rig_date',          label: 'In Transit to Rig/JDIL Location Date', type: 'date' },
+      // 12. Logistics Team Code — special role-based rendering (see field render)
+      { key: 'logistics_team_code',          label: 'Logistics Team Code',          type: 'logistics_code' },
     ],
   },
   {
@@ -153,6 +155,16 @@ export default function PODetailPanel({ po, onClose, onSave }) {
 
   useEffect(() => {
     if (po?.id) { setItemsError(''); setItemsMsg(''); loadLineItems() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [po?.id])
+
+  // Auto-fill Logistics Team Code for logistics users when the PO has none yet
+  // (mirrors the buyer_code auto-fill for purchase). Stages it for save.
+  useEffect(() => {
+    if (profile?.role === 'logistics' && profile?.team_code && !po?.logistics_team_code) {
+      setForm(f => ({ ...f, logistics_team_code: profile.team_code }))
+      setPendingChanges(p => ({ ...p, logistics_team_code: profile.team_code }))
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [po?.id])
 
@@ -367,7 +379,7 @@ export default function PODetailPanel({ po, onClose, onSave }) {
         <div className="px-5 py-3 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-800">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <StatusPill status={status} />
+              <StatusPill status={status} label={getDisplayStatus(form)} />
               {isCSuite && (
                 <span className="inline-flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-800 rounded-full px-2 py-0.5">
                   <LockIcon /> Read-only
@@ -431,6 +443,23 @@ export default function PODetailPanel({ po, onClose, onSave }) {
                           }}
                           placeholder="Search or type vendor name"
                         />
+                      ) : f.key === 'logistics_team_code' ? (
+                        role === 'admin' ? (
+                          <select
+                            className={baseClass}
+                            value={form.logistics_team_code || ''}
+                            onChange={e => set('logistics_team_code', e.target.value)}
+                          >
+                            <option value="">—</option>
+                            {LOGISTICS_TEAM_CODES.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        ) : (
+                          // Logistics user — auto-filled, read-only with lock
+                          <div className="input-field flex items-center justify-between bg-gray-50 dark:bg-gray-800/40 text-gray-700 dark:text-gray-300 cursor-not-allowed select-none">
+                            <span>{form.logistics_team_code || profile?.team_code || '—'}</span>
+                            <LockIcon />
+                          </div>
+                        )
                       ) : f.type === 'select' ? (
                         <select
                           className={baseClass}

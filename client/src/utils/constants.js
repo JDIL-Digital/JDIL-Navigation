@@ -19,6 +19,7 @@ export const PO_RIG_OPTIONS = [
   'Taloja',
   'Nagothane',
   'Nhava',
+  'Pipavav',
 ]
 
 // Alias — always mirrors PO_RIG_OPTIONS so legacy imports keep working
@@ -38,11 +39,22 @@ export const DELIVERY_MODES = ['Vendor Delivery', 'JDIL Pickup']
 // Mode of Transport — CHANGE 4 (OSV / CCB / CCC / Road-Courier)
 export const TRANSPORT_MODES = ['OSV', 'CCB', 'CCC', 'Road/Courier']
 
-// Dispatch location (5 options incl. Rig) — used for Material Dispatch Location
-export const LOCATION_OPTIONS = ['BKC', 'Taloja', 'Nagothane', 'Nhava', 'Rig']
+// Dispatch location — used for Material Dispatch Location (incl. Rig + Pipavav)
+export const LOCATION_OPTIONS = ['BKC', 'Taloja', 'Nagothane', 'Nhava', 'Pipavav', 'Rig']
 
-// Received location (4 hub options, NO Rig) — used for Material Received Location
-export const LOCATION_OPTIONS_NO_RIG = ['BKC', 'Taloja', 'Nagothane', 'Nhava']
+// Material Received Location — JDIL hubs + Pipavav (no rigs)
+export const LOCATION_OPTIONS_NO_RIG = ['BKC', 'Taloja', 'Nagothane', 'Nhava', 'Pipavav']
+
+// Material Dispatch Location — 5 JDIL hubs + 6 base rigs + 6 DD variants (17 total).
+// Deliberately excludes the generic "Rig", "Directional Drilling", and "MLU".
+export const DISPATCH_LOCATION_OPTIONS = [
+  'BKC', 'Taloja', 'Nagothane', 'Nhava', 'Pipavav',
+  'Discovery 1', 'Virtue 1', 'Jindal Star', 'Jindal Explorer', 'Jindal Pioneer', 'Jindal Supreme',
+  'Discovery 1 DD', 'Virtue 1 DD', 'Jindal Star DD', 'Jindal Explorer DD', 'Jindal Pioneer DD', 'Jindal Supreme DD',
+]
+
+// Logistics team codes (mirrors LOGISTICS_CODES) for the Logistics Team Code field.
+export const LOGISTICS_TEAM_CODES = ['SV-01', 'SS-02', 'AK-03', 'KT-04', 'MK-05', 'RS-06']
 
 // Rig "Remarks" dropdown options (CHANGE 7) — free-text details go in Other Remarks
 export const RIG_REMARKS_OPTIONS = [

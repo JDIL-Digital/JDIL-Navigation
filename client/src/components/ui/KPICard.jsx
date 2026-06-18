@@ -1,4 +1,4 @@
-export default function KPICard({ title, value, sub, icon, color = 'green', trend }) {
+export default function KPICard({ title, value, sub, icon, color = 'green', trend, onClick }) {
   const colors = {
     green:  'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400',
     red:    'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400',
@@ -8,8 +8,16 @@ export default function KPICard({ title, value, sub, icon, color = 'green', tren
     teal:   'bg-teal-50 dark:bg-teal-900/20 text-teal-600 dark:text-teal-400',
   }
 
+  const clickable = typeof onClick === 'function'
+
   return (
-    <div className="card p-4 flex items-start gap-4">
+    <div
+      onClick={onClick}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={clickable ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } }) : undefined}
+      className={`card p-4 flex items-start gap-4 group ${clickable ? 'cursor-pointer transition-all hover:shadow-md hover:border-jdil-green/40 dark:hover:border-jdil-green/40' : ''}`}
+    >
       <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${colors[color]}`}>
         {icon}
       </div>
@@ -22,6 +30,14 @@ export default function KPICard({ title, value, sub, icon, color = 'green', tren
         <div className={`text-xs font-medium shrink-0 ${trend >= 0 ? 'text-green-600' : 'text-red-600'}`}>
           {trend >= 0 ? '↑' : '↓'} {Math.abs(trend)}%
         </div>
+      )}
+      {clickable && (
+        <svg
+          className="w-4 h-4 shrink-0 text-gray-300 dark:text-gray-600 group-hover:text-jdil-green transition-colors"
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+        </svg>
       )}
     </div>
   )

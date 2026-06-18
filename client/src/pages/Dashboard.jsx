@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
   LineChart, Line, PieChart, Pie, Legend,
@@ -12,25 +13,25 @@ import MaterialMap from '../components/ui/MaterialMap'
 import ReportsDropdown from '../components/ui/ReportsDropdown'
 import { useTheme } from '../context/ThemeContext'
 
-// ─── Stage transitions for "avg days per stage" chart ────────────────────────
+// ─── Stage transitions for "avg days per stage" chart (short axis + full tooltip)
 const STAGE_PAIRS = [
-  { label: 'PO→Vendor\nConf',    f1: 'po_date',                f2: 'promised_ready_date'   },
-  { label: 'Conf→\nReceived',    f1: 'promised_ready_date',    f2: 'material_received_date' },
-  { label: 'Received→\nDispatch',f1: 'material_received_date', f2: 'dispatch_date'          },
-  { label: 'Dispatch→\nIn Transit', f1: 'dispatch_date',       f2: 'in_transit_rig_date'   },
-  { label: 'In Transit\n→Rig',   f1: 'in_transit_rig_date',    f2: 'delivered_to_rig_date' },
+  { short: 'PO→Conf',    full: 'PO → Vendor Confirmed',    f1: 'po_date',                f2: 'promised_ready_date'   },
+  { short: 'Conf→Rcvd',  full: 'Vendor Confirmed → Received', f1: 'promised_ready_date', f2: 'material_received_date' },
+  { short: 'Rcvd→Disp',  full: 'Received → Dispatched',    f1: 'material_received_date', f2: 'dispatch_date'          },
+  { short: 'Disp→Trans', full: 'Dispatched → In Transit',  f1: 'dispatch_date',          f2: 'in_transit_rig_date'   },
+  { short: 'Trans→Deliv',full: 'In Transit → Delivered',   f1: 'in_transit_rig_date',    f2: 'delivered_to_rig_date' },
 ]
 
-// ─── Pipeline stage label abbreviations ──────────────────────────────────────
+// ─── Pipeline stage label abbreviations (short axis; full name shown in tooltip)
 const STAGE_LABELS = {
-  'MR Created':               'MR Created',
-  'PO Released':              'PO Released',
-  'Buyer Assigned':           'Buyer Assigned',
-  'Vendor Confirmed':         'Vendor Confirmed',
-  'In Transit to JDIL':       'In Transit→JDIL',
+  'MR Created':               'MR',
+  'PO Released':              'PO',
+  'Buyer Assigned':           'Buyer',
+  'Vendor Confirmed':         'Vendor',
   'At JDIL Location':         'At JDIL',
-  'Dispatched from JDIL':     'Disp→JDIL',
-  'In Transit to Rig':        'In Transit→Rig',
+  'Dispatched from JDIL':     'Dispatched',
+  'In Transit to JDIL':       'Transit JDIL',
+  'In Transit to Rig':        'Transit Rig',
   'Delivered to Rig':         'Delivered',
 }
 
@@ -62,10 +63,20 @@ function scoreColor(pct, variant = 'text') {
 export default function Dashboard() {
   const { profile } = useAuth()
   const { dark } = useTheme()
+  const navigate = useNavigate()
   const [orders, setOrders]       = useState([])
   const [lineItems, setLineItems] = useState([])
   const [loading, setLoading]     = useState(true)
   const [rigFilter, setRigFilter] = useState('all')
+
+  // Navigate to the Purchase Orders page with a quick-filter + current rig pre-applied.
+  function goToPurchase(filterKey) {
+    const params = new URLSearchParams()
+    if (filterKey) params.set('filter', filterKey)
+    if (rigFilter && rigFilter !== 'all') params.set('rig', rigFilter)
+    const qs = params.toString()
+    navigate(`/purchase${qs ? `?${qs}` : ''}`)
+  }
 
   // ── Fetch ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -106,9 +117,8 @@ export default function Dashboard() {
   const itemStats = useMemo(() => {
     const ids   = new Set(filtered.map(o => o.id))
     const items = lineItems.filter(it => ids.has(it.po_id))
-    const total   = items.length
     const pending = items.filter(it => it.item_status !== 'Fully Delivered').length
-    return { total, pending }
+    return { pending }
   }, [lineItems, filtered])
 
   // ── KPIs ──────────────────────────────────────────────────────────────────
@@ -153,17 +163,7 @@ export default function Dashboard() {
       ? Math.round(vendorScores.reduce((a, b) => a + b, 0) / vendorScores.length)
       : null
 
-    // 6. Hub throughput — avg days from dispatch_date → in_transit_rig_date
-    //    (proxy for total time in JDIL hub pipeline)
-    const hubPOs = filtered.filter(o => o.dispatch_date && o.in_transit_rig_date)
-    const hubDays = hubPOs
-      .map(o => daysBetween(o.dispatch_date, o.in_transit_rig_date))
-      .filter(d => d >= 0)
-    const avgHubDays = hubDays.length
-      ? Math.round(hubDays.reduce((a, b) => a + b, 0) / hubDays.length)
-      : null
-
-    return { onTimePct, avgCycle, openCount, staleCount, avgVendorScore, avgHubDays }
+    return { onTimePct, avgCycle, openCount, staleCount, avgVendorScore }
   }, [filtered, openPOs, deliveredPOs])
 
   // ── Pipeline chart ────────────────────────────────────────────────────────
@@ -178,14 +178,14 @@ export default function Dashboard() {
 
   // ── Avg days per stage chart ──────────────────────────────────────────────
   const avgDaysData = useMemo(() =>
-    STAGE_PAIRS.map(({ label, f1, f2 }) => {
+    STAGE_PAIRS.map(({ short, full, f1, f2 }) => {
       const pairs = filtered.filter(o => o[f1] && o[f2])
       const avg   = pairs.length
         ? Math.round(
             pairs.reduce((s, o) => s + daysBetween(o[f1], o[f2]), 0) / pairs.length
           )
         : 0
-      return { name: label, days: avg }
+      return { name: short, full, days: avg }
     }),
     [filtered]
   )
@@ -307,13 +307,14 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ── KPI Row ── */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+      {/* ── KPI Row — clickable, deep-links into /purchase with a filter ── */}
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-3 gap-3">
         <KPICard
           title="On-Time Delivery"
           value={kpis.onTimePct !== null ? `${kpis.onTimePct}%` : '—'}
           sub={`${deliveredPOs.length} delivered POs`}
           color="green"
+          onClick={() => goToPurchase('on-time-delivered')}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
         />
         <KPICard
@@ -321,6 +322,7 @@ export default function Dashboard() {
           value={kpis.avgCycle !== null ? `${kpis.avgCycle}d` : '—'}
           sub="PO date → delivery"
           color="blue"
+          onClick={() => goToPurchase('delivered')}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
         />
         <KPICard
@@ -328,13 +330,15 @@ export default function Dashboard() {
           value={kpis.openCount}
           sub="not yet delivered"
           color="purple"
+          onClick={() => goToPurchase('open')}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>}
         />
         <KPICard
           title="Stale POs"
           value={kpis.staleCount}
-          sub={`> ${OVERDUE_DAYS} days elapsed`}
+          sub={`> ${OVERDUE_DAYS} days past promised`}
           color="red"
+          onClick={() => goToPurchase('stale')}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>}
         />
         <KPICard
@@ -342,27 +346,15 @@ export default function Dashboard() {
           value={kpis.avgVendorScore !== null ? `${kpis.avgVendorScore}%` : '—'}
           sub="avg on-time % per vendor"
           color="teal"
+          onClick={() => goToPurchase(null)}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>}
-        />
-        <KPICard
-          title="Hub Throughput"
-          value={kpis.avgHubDays !== null ? `${kpis.avgHubDays}d` : '—'}
-          sub="avg dispatch→rig handoff"
-          color="orange"
-          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>}
-        />
-        <KPICard
-          title="Total Line Items"
-          value={itemStats.total}
-          sub="across all POs"
-          color="blue"
-          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" /></svg>}
         />
         <KPICard
           title="Items Pending Delivery"
           value={itemStats.pending}
           sub="not fully delivered"
           color="orange"
+          onClick={() => goToPurchase('items-pending')}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg>}
         />
       </div>
@@ -411,16 +403,18 @@ export default function Dashboard() {
             </span>
           </div>
           <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={avgDaysData} margin={{ top: 4, right: 4, left: -20, bottom: 20 }}>
+            <BarChart data={avgDaysData} margin={{ top: 4, right: 4, left: -20, bottom: 60 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={dark ? '#374151' : '#e5e7eb'} />
               <XAxis
                 dataKey="name"
                 tick={{ fontSize: 10, fill: dark ? '#6b7280' : '#9ca3af' }}
+                angle={-45}
+                textAnchor="end"
                 interval={0}
               />
               <YAxis tick={{ fontSize: 11, fill: dark ? '#6b7280' : '#9ca3af' }} />
               <Tooltip
-                formatter={v => [`${v} days`]}
+                formatter={(v, _n, p) => [`${v} days`, p.payload.full]}
                 contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${dark ? '#374151' : '#e5e7eb'}`, background: dark ? '#1f2937' : '#ffffff', color: dark ? '#f3f4f6' : '#111827' }}
                 cursor={{ fill: 'rgba(59,130,246,0.08)' }}
               />
