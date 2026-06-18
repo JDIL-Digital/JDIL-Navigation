@@ -109,13 +109,22 @@ function drawHeader(doc, reportTitle, subtitle, logoData) {
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(7)
   const now    = new Date()
-  const genStr = `Generated: ${now.toLocaleDateString('en-IN')} ${now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
+  const genStr = `Generated: ${now.toLocaleDateString('en-IN')} ${now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
   doc.text(genStr, pageW - MARGIN, 19, { align: 'right' })
   if (subtitle) doc.text(subtitle, pageW - MARGIN, 25, { align: 'right' })
 
   doc.setTextColor(0, 0, 0)
   doc.setFont('helvetica', 'normal')
   return HEADER_H + 7   // content start y
+}
+
+/**
+ * Material description for reports: prefer material_description_2 (where the
+ * historical/import data lives), then the first line item's material (decorated
+ * onto the order as _lineItemMaterial by the caller), then the legacy column.
+ */
+function reportMaterial(po) {
+  return po.material_description_2 || po._lineItemMaterial || po.material_description || ''
 }
 
 /** Adds footer (confidential + page numbers) to ALL pages. Call last. */
@@ -667,8 +676,7 @@ export async function generateSinglePOReport(po, auditLog = [], lineItems = []) 
       ['Vendor Phone',        po.vendor_phone_number   || '—'],
       ['Buyer Code',          po.buyer_code            || '—'],
       ['Delivery Mode',       po.delivery_mode         || '—'],
-      ['Material Description',   po.material_description   || '—'],
-      ['Material Description 2', po.material_description_2 || '—'],
+      ['Material Description', (po.material_description_2 || lineItems?.[0]?.material_description || po.material_description) || '—'],
     ],
     theme: 'grid',
     styles: { fontSize: 8.5, cellPadding: 2.5 },
@@ -837,10 +845,10 @@ export async function generateWeeklyReport(orders) {
   doc.autoTable({
     startY: y,
     margin: { left: MARGIN, right: MARGIN, top: HEADER_H + 8, bottom: 15 },
-    head: [['PO #', 'MR #', 'Rig', 'Vendor', 'Material', 'Status', 'PO Date', 'Promise Date', 'Days', 'Delivered']],
+    head: [['PO #', 'MR #', 'Rig', 'Vendor', 'Material Description', 'Status', 'PO Date', 'Promise Date', 'Days', 'Delivered']],
     body: weekOrders.map(o => [
       o.po_number || '—', o.mr_number || '—', o.rig_name || '—', o.vendor_name || '—',
-      (o.material_description || '').substring(0, 32),
+      (reportMaterial(o) || '').substring(0, 32),
       calcStatus(o), formatDate(o.po_date), formatDate(o.promised_ready_date),
       `${daysElapsed(o.po_date)}d`, formatDate(o.delivered_to_rig_date),
     ]),
@@ -952,10 +960,10 @@ export async function generateMonthlyReport(orders) {
   doc.autoTable({
     startY: y,
     margin: { left: MARGIN, right: MARGIN, top: HEADER_H + 8, bottom: 15 },
-    head: [['PO #', 'MR #', 'Rig', 'Vendor', 'Material', 'Status', 'PO Date', 'Promise Date', 'Days', 'Delivered']],
+    head: [['PO #', 'MR #', 'Rig', 'Vendor', 'Material Description', 'Status', 'PO Date', 'Promise Date', 'Days', 'Delivered']],
     body: monthOrders.map(o => [
       o.po_number || '—', o.mr_number || '—', o.rig_name || '—', o.vendor_name || '—',
-      (o.material_description || '').substring(0, 30), calcStatus(o),
+      (reportMaterial(o) || '').substring(0, 30), calcStatus(o),
       formatDate(o.po_date), formatDate(o.promised_ready_date), `${daysElapsed(o.po_date)}d`, formatDate(o.delivered_to_rig_date),
     ]),
     theme: 'striped',
@@ -1098,8 +1106,8 @@ export async function generateQuarterlyReport(orders) {
     doc.autoTable({
       startY: y,
       margin: { left: MARGIN, right: MARGIN, top: HEADER_H + 8, bottom: 15 },
-      head: [['PO #', 'MR #', 'Rig', 'Vendor', 'Material', 'PO Date', 'Days Open', 'Status']],
-      body: staleList.map(o => [o.po_number || '—', o.mr_number || '—', o.rig_name || '—', o.vendor_name || '—', (o.material_description || '').substring(0, 35), formatDate(o.po_date), `${daysElapsed(o.po_date)}d`, calcStatus(o)]),
+      head: [['PO #', 'MR #', 'Rig', 'Vendor', 'Material Description', 'PO Date', 'Days Open', 'Status']],
+      body: staleList.map(o => [o.po_number || '—', o.mr_number || '—', o.rig_name || '—', o.vendor_name || '—', (reportMaterial(o) || '').substring(0, 35), formatDate(o.po_date), `${daysElapsed(o.po_date)}d`, calcStatus(o)]),
       theme: 'striped',
       headStyles: { fillColor: [185, 28, 28], textColor: 255, fontStyle: 'bold', fontSize: 7.5 },
       styles: { fontSize: 7.5, overflow: 'ellipsize', cellPadding: 2 },

@@ -27,7 +27,7 @@ export function daysElapsed(poDate) {
 // in-transit PO is heading to a rig; otherwise it's between JDIL hubs.
 const RIG_KEYWORDS = [
   'Discovery 1', 'Virtue 1', 'Jindal Star', 'Jindal Explorer',
-  'Jindal Pioneer', 'Jindal Supreme', 'Directional Drilling', 'MLU',
+  'Jindal Pioneer', 'Jindal Supreme', 'Directional Drilling', 'MLU', 'Pipavav',
 ]
 
 export function calcStatus(po) {
@@ -44,6 +44,22 @@ export function calcStatus(po) {
     status = isRig ? 'In Transit to Rig' : 'In Transit to JDIL'
   }
   if (po.delivered_to_rig_date) status = 'Delivered to Rig'
+  return status
+}
+
+/**
+ * Visible status-pill text. Pipeline stage (calcStatus) is unchanged — this only
+ * enriches the two "In Transit" stages with the specific dispatch destination
+ * for display. e.g. "In Transit to Nhava" / "In Transit to Jindal Explorer".
+ */
+export function getDisplayStatus(po) {
+  const status = calcStatus(po)
+  if ((status === 'In Transit to JDIL' || status === 'In Transit to Rig') && po.jdil_location) {
+    return `In Transit to ${po.jdil_location}`
+  }
+  if (status === 'Dispatched from JDIL' && po.jdil_location) {
+    return `Dispatched to ${po.jdil_location}`
+  }
   return status
 }
 

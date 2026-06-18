@@ -15,7 +15,7 @@ const ROLE_EDITABLE_FIELDS = {
     'dispatch_date',
     'dc_number_bkc', 'dc_number_taloja', 'dc_number_nagothane', 'dc_number_nhava',
     'mode_of_transport', 'transporter_details', 'jdil_location', 'in_transit_rig_date',
-    'material_received_date', 'material_received_location',
+    'material_received_date', 'material_received_location', 'logistics_team_code',
   ],
   rig: [
     'delivered_to_rig_date', 'remarks', 'other_remarks',

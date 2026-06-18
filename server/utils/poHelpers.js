@@ -2,7 +2,7 @@
 
 const RIG_KEYWORDS = [
   'Discovery 1', 'Virtue 1', 'Jindal Star', 'Jindal Explorer',
-  'Jindal Pioneer', 'Jindal Supreme', 'Directional Drilling', 'MLU',
+  'Jindal Pioneer', 'Jindal Supreme', 'Directional Drilling', 'MLU', 'Pipavav',
 ]
 
 function calcStatus(po) {
@@ -22,6 +22,19 @@ function calcStatus(po) {
   return status
 }
 
+// Visible status-pill text — pipeline stage unchanged; enriches "In Transit"
+// stages with the specific dispatch destination for display.
+function getDisplayStatus(po) {
+  const status = calcStatus(po)
+  if ((status === 'In Transit to JDIL' || status === 'In Transit to Rig') && po.jdil_location) {
+    return `In Transit to ${po.jdil_location}`
+  }
+  if (status === 'Dispatched from JDIL' && po.jdil_location) {
+    return `Dispatched to ${po.jdil_location}`
+  }
+  return status
+}
+
 function daysElapsed(poDate) {
   if (!poDate) return 0
   return Math.floor((Date.now() - new Date(poDate).getTime()) / 86400000)
@@ -34,4 +47,4 @@ function overdueDays(po) {
   return Math.floor((Date.now() - new Date(base).getTime()) / 86400000)
 }
 
-module.exports = { calcStatus, daysElapsed, overdueDays }
+module.exports = { calcStatus, getDisplayStatus, daysElapsed, overdueDays }

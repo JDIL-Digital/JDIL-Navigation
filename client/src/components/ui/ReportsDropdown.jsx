@@ -80,14 +80,29 @@ export default function ReportsDropdown() {
     setError('')
     setOpen(false)
     try {
-      // Always fetch a fresh, complete dataset — unaffected by any dashboard filters
-      const { data: orders, error: fetchErr } = await supabase
-        .from('po_orders')
-        .select('*')
-        .order('po_date', { ascending: false })
-
+      // Always fetch a FRESH, complete dataset on every click — never cached.
+      // Line items are fetched too so reports can fall back to a line item's
+      // material description when material_description_2 is empty.
+      const [{ data: orders, error: fetchErr }, { data: items, error: itemsErr }] = await Promise.all([
+        supabase.from('po_orders').select('*').order('po_date', { ascending: false }),
+        supabase.from('po_line_items').select('po_id, material_description, created_at').order('created_at', { ascending: true }),
+      ])
       if (fetchErr) throw fetchErr
-      await report.fn(orders || [])
+      if (itemsErr) console.warn('Report line-items fetch failed (non-critical):', itemsErr.message)
+
+      // First (earliest) line item material per PO.
+      const firstMaterialByPo = new Map()
+      for (const it of (items || [])) {
+        if (!firstMaterialByPo.has(it.po_id) && it.material_description) {
+          firstMaterialByPo.set(it.po_id, it.material_description)
+        }
+      }
+      const decorated = (orders || []).map(o => ({
+        ...o,
+        _lineItemMaterial: firstMaterialByPo.get(o.id) || '',
+      }))
+
+      await report.fn(decorated)
     } catch (e) {
       console.error(`Report generation error (${report.key}):`, e)
       setError(`Failed to generate report: ${e.message}`)

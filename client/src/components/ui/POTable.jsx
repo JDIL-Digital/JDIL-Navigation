@@ -1,4 +1,4 @@
-import { calcStatus, daysElapsed, overdueDays, formatDate } from '../../utils/helpers'
+import { calcStatus, getDisplayStatus, daysElapsed, overdueDays, formatDate } from '../../utils/helpers'
 import { OVERDUE_DAYS } from '../../utils/constants'
 import { StatusPill, PipelineDots } from './StatusPill'
 
@@ -13,6 +13,7 @@ export default function POTable({ orders, onRowClick, visibleColumns = 'purchase
             {/* Hide on mobile */}
             <th className="table-header hidden sm:table-cell">Vendor</th>
             <th className="table-header hidden md:table-cell">Material</th>
+            <th className="table-header hidden lg:table-cell">Logistics Code</th>
             <th className="table-header">Status</th>
             <th className="table-header hidden lg:table-cell">Pipeline</th>
             {visibleColumns === 'logistics' && (
@@ -36,7 +37,7 @@ export default function POTable({ orders, onRowClick, visibleColumns = 'purchase
         <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
           {orders.length === 0 ? (
             <tr>
-              <td colSpan={10} className="text-center py-12 text-sm text-gray-400 dark:text-gray-500">
+              <td colSpan={12} className="text-center py-12 text-sm text-gray-400 dark:text-gray-500">
                 No purchase orders found
               </td>
             </tr>
@@ -67,9 +68,12 @@ export default function POTable({ orders, onRowClick, visibleColumns = 'purchase
                   <td className="table-cell hidden md:table-cell">
                     <span className="text-xs truncate max-w-[140px] block">{po.material_description || po.material_description_2}</span>
                   </td>
-                  {/* Status — always visible */}
+                  {/* Logistics Team Code — hidden on smaller screens */}
+                  <td className="table-cell text-xs hidden lg:table-cell">{po.logistics_team_code || '—'}</td>
+                  {/* Status — always visible. Pill colour from pipeline stage,
+                      text enriched with dispatch destination when in transit. */}
                   <td className="table-cell">
-                    <StatusPill status={status} />
+                    <StatusPill status={status} label={getDisplayStatus(po)} />
                   </td>
                   {/* Pipeline dots — hidden on mobile */}
                   <td className="table-cell hidden lg:table-cell">
