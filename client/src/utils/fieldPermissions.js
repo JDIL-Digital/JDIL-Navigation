@@ -45,3 +45,42 @@ export function hasAnyEditableField(role) {
   const allowed = ROLE_EDITABLE_FIELDS[role]
   return Array.isArray(allowed) && allowed.length > 0
 }
+
+// ── Reverse Logistics (mirror of server RL_ROLE_EDITABLE_FIELDS) ──────────────
+export const RL_ROLE_EDITABLE_FIELDS = {
+  rig: [
+    'material_description_2', 'rig_dispatch_date', 'rig_dispatch_location', 'rig_mode_of_transport',
+    'rig_received_date', 'rig_remarks', 'rig_other_remarks',
+  ],
+  logistics: [
+    'jdil_in_logistics_code', 'jdil_in_received_date', 'jdil_in_received_location',
+    'jdil_in_dispatch_date', 'jdil_in_dispatch_location', 'jdil_in_mode_of_transport', 'jdil_in_remarks',
+    'jdil_in_dc_bkc', 'jdil_in_dc_taloja', 'jdil_in_dc_nhava', 'jdil_in_dc_nagothane',
+    'jdil_out_received_date', 'jdil_out_received_location', 'jdil_out_dispatch_date',
+    'jdil_out_dispatch_location', 'jdil_out_dc_number', 'jdil_out_mode_of_transport',
+  ],
+  purchase: [
+    'vendor_name', 'vendor_contact', 'vendor_phone', 'vendor_received_date',
+    'repair_description', 'expected_return_date', 'vendor_dispatch_date',
+    'vendor_dispatch_location', 'vendor_mode_of_transport',
+  ],
+  admin: null,
+  csuite: [],
+}
+
+const RL_SYSTEM_FIELDS = new Set([
+  'id', 'job_type', 'job_number', 'mr_number', 'po_number', 'rig_name', 'status',
+  'is_stale', 'created_by', 'created_at', 'updated_at',
+])
+
+export function canEditRLField(role, fieldKey) {
+  if (RL_SYSTEM_FIELDS.has(fieldKey)) return false
+  const allowed = RL_ROLE_EDITABLE_FIELDS[role]
+  if (allowed === null) return true
+  if (!allowed || allowed.length === 0) return false
+  return allowed.includes(fieldKey)
+}
+
+export function canCreateRLJob(role) {
+  return role === 'rig' || role === 'admin'
+}

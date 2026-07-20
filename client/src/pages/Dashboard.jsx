@@ -2,37 +2,50 @@ import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
-  LineChart, Line, PieChart, Pie, Legend,
+  LineChart, Line, PieChart, Pie, Legend, LabelList,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { calcStatus, daysElapsed, overdueDays } from '../utils/helpers'
-import { PO_STATUSES, PO_RIG_OPTIONS, OVERDUE_DAYS } from '../utils/constants'
+import { PO_RIG_OPTIONS, OVERDUE_DAYS, LOGISTICS_TEAM_CODES } from '../utils/constants'
 import KPICard from '../components/ui/KPICard'
 import MaterialMap from '../components/ui/MaterialMap'
 import ReportsDropdown from '../components/ui/ReportsDropdown'
 import { useTheme } from '../context/ThemeContext'
 
-// ─── Stage transitions for "avg days per stage" chart (short axis + full tooltip)
-const STAGE_PAIRS = [
-  { short: 'PO→Conf',    full: 'PO → Vendor Confirmed',    f1: 'po_date',                f2: 'promised_ready_date'   },
-  { short: 'Conf→Rcvd',  full: 'Vendor Confirmed → Received', f1: 'promised_ready_date', f2: 'material_received_date' },
-  { short: 'Rcvd→Disp',  full: 'Received → Dispatched',    f1: 'material_received_date', f2: 'dispatch_date'          },
-  { short: 'Disp→Trans', full: 'Dispatched → In Transit',  f1: 'dispatch_date',          f2: 'in_transit_rig_date'   },
-  { short: 'Trans→Deliv',full: 'In Transit → Delivered',   f1: 'in_transit_rig_date',    f2: 'delivered_to_rig_date' },
-]
+// Stacked-bar segment colours (shared by both performance charts)
+const PERF_COLORS = { pending: '#F59E0B', done: '#10B981', overdue: '#EF4444' }
 
-// ─── Pipeline stage label abbreviations (short axis; full name shown in tooltip)
-const STAGE_LABELS = {
-  'MR Created':               'MR',
-  'PO Released':              'PO',
-  'Buyer Assigned':           'Buyer',
-  'Vendor Confirmed':         'Vendor',
-  'At JDIL Location':         'At JDIL',
-  'Dispatched from JDIL':     'Dispatched',
-  'In Transit to JDIL':       'Transit JDIL',
-  'In Transit to Rig':        'Transit Rig',
-  'Delivered to Rig':         'Delivered',
+// Tooltip: "SV-01: 45 total | 5 pending | 38 completed | 2 overdue"
+function PerfTooltip({ active, payload, doneKey, doneLabel, dark }) {
+  if (!active || !payload || !payload.length) return null
+  const d = payload[0].payload
+  return (
+    <div style={{
+      fontSize: 12, borderRadius: 8, padding: '8px 10px',
+      border: `1px solid ${dark ? '#374151' : '#e5e7eb'}`,
+      background: dark ? '#1f2937' : '#ffffff', color: dark ? '#f3f4f6' : '#111827',
+    }}>
+      <span style={{ fontWeight: 600 }}>{d.name}: {d.total} total</span>
+      {' | '}{d.pending} pending{' | '}{d[doneKey]} {doneLabel}
+      {' | '}<span style={{ color: '#EF4444' }}>{d.overdue} overdue</span>
+    </div>
+  )
+}
+
+// Static legend rendered BELOW the chart (avoids overlap with X-axis labels).
+function PerfLegend({ doneLabel }) {
+  const items = [['Pending', PERF_COLORS.pending], [doneLabel, PERF_COLORS.done], ['Overdue', PERF_COLORS.overdue]]
+  return (
+    <div className="flex items-center justify-center gap-4 mt-2 flex-wrap">
+      {items.map(([label, color]) => (
+        <span key={label} className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+          <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: color }} />
+          {label}
+        </span>
+      ))}
+    </div>
+  )
 }
 
 // ─── Donut status colours ─────────────────────────────────────────────────────
@@ -66,6 +79,7 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const [orders, setOrders]       = useState([])
   const [lineItems, setLineItems] = useState([])
+  const [rlJobs, setRlJobs]       = useState([])
   const [loading, setLoading]     = useState(true)
   const [rigFilter, setRigFilter] = useState('all')
 
@@ -93,10 +107,32 @@ export default function Dashboard() {
       if (itemsErr) console.error('Dashboard line items fetch error:', itemsErr)
       setOrders(data || [])
       setLineItems(items || [])
+      // Reverse logistics jobs (via server — respects rig scoping)
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        const resp = await fetch('/api/rl/jobs', { headers: { Authorization: `Bearer ${session?.access_token}` } })
+        if (resp.ok) setRlJobs(await resp.json())
+      } catch (e) { console.warn('Dashboard RL fetch failed:', e) }
       setLoading(false)
     }
     load()
   }, [profile])
+
+  // ── Reverse logistics KPI counts ──────────────────────────────────────────
+  const rlStats = useMemo(() => {
+    const openOf = t => rlJobs.filter(j =>
+      j.job_type === t &&
+      j.status !== 'Failed' &&
+      j.status !== 'Delivered to Rig' &&
+      j.status !== 'Delivered to Vendor'
+    ).length
+    return {
+      repair:      openOf('Repair'),
+      ret:         openOf('Return'),
+      replacement: openOf('Replacement'),
+      failed:      rlJobs.filter(j => j.status === 'Failed').length,
+    }
+  }, [rlJobs])
 
   // ── Filtered dataset ──────────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -166,30 +202,33 @@ export default function Dashboard() {
     return { onTimePct, avgCycle, openCount, staleCount, avgVendorScore }
   }, [filtered, openPOs, deliveredPOs])
 
-  // ── Pipeline chart ────────────────────────────────────────────────────────
-  const pipelineData = useMemo(() =>
-    PO_STATUSES.map(s => ({
-      name: STAGE_LABELS[s] || s,
-      full: s,
-      count: filtered.filter(o => calcStatus(o) === s).length,
-    })),
-    [filtered]
-  )
+  // ── Performance of Logistics (all-time, from full orders set) ─────────────
+  const logisticsPerf = useMemo(() => {
+    const PENDING = new Set(['At JDIL Location', 'Vendor Confirmed', 'PO Released', 'Buyer Assigned', 'MR Created'])
+    return LOGISTICS_TEAM_CODES.map(code => {
+      const mine = orders.filter(o => o.logistics_team_code === code)
+      const completed = mine.filter(o => o.dispatch_date).length
+      const pendingList = mine.filter(o => !o.dispatch_date && PENDING.has(calcStatus(o)))
+      const overdue = pendingList.filter(o => overdueDays(o) > OVERDUE_DAYS).length
+      const pending = pendingList.length - overdue
+      return { name: code, pending, completed, overdue, total: pending + completed + overdue }
+    })
+  }, [orders])
 
-  // ── Avg days per stage chart ──────────────────────────────────────────────
-  const avgDaysData = useMemo(() =>
-    STAGE_PAIRS.map(({ short, full, f1, f2 }) => {
-      const pairs = filtered.filter(o => o[f1] && o[f2])
-      const avg   = pairs.length
-        ? Math.round(
-            pairs.reduce((s, o) => s + daysBetween(o[f1], o[f2]), 0) / pairs.length
-          )
-        : 0
-      return { name: short, full, days: avg }
-    }),
-    [filtered]
-  )
-  const maxAvgDays = Math.max(...avgDaysData.map(d => d.days), 1)
+  // ── Performance of Rig (DD variants grouped under base rig) ────────────────
+  const RIG_BASES = ['Discovery 1', 'Virtue 1', 'Jindal Star', 'Jindal Explorer', 'Jindal Pioneer', 'Jindal Supreme', 'Directional Drilling', 'MLU']
+  const rigPerf = useMemo(() => {
+    const PENDING = new Set(['In Transit to Rig', 'In Transit to JDIL', 'Dispatched from JDIL', 'At JDIL Location'])
+    return RIG_BASES.map(base => {
+      const b = base.toLowerCase()
+      const mine = orders.filter(o => (o.rig_name || '').toLowerCase().startsWith(b))
+      const delivered = mine.filter(o => o.delivered_to_rig_date).length
+      const pendingList = mine.filter(o => !o.delivered_to_rig_date && PENDING.has(calcStatus(o)))
+      const overdue = pendingList.filter(o => overdueDays(o) > OVERDUE_DAYS).length
+      const pending = pendingList.length - overdue
+      return { name: base, pending, delivered, overdue, total: pending + delivered + overdue }
+    })
+  }, [orders])   // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 12-week PO creation trend ─────────────────────────────────────────────
   const weeklyTrend = useMemo(() => {
@@ -359,75 +398,85 @@ export default function Dashboard() {
         />
       </div>
 
+      {/* ── Reverse Logistics KPI Row ── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <KPICard
+          title="Open Repair Jobs"
+          value={rlStats.repair}
+          sub="in progress"
+          color="blue"
+          onClick={() => navigate('/repair?filter=open')}
+          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /></svg>}
+        />
+        <KPICard
+          title="Open Return Jobs"
+          value={rlStats.ret}
+          sub="in progress"
+          color="teal"
+          onClick={() => navigate('/return?filter=open')}
+          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>}
+        />
+        <KPICard
+          title="Open Replacement Jobs"
+          value={rlStats.replacement}
+          sub="in progress"
+          color="purple"
+          onClick={() => navigate('/replacement?filter=open')}
+          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>}
+        />
+        <KPICard
+          title="Failed Jobs"
+          value={rlStats.failed}
+          sub="all reverse logistics"
+          color="red"
+          onClick={() => navigate('/reverse-logistics?filter=failed')}
+          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M12 5a7 7 0 100 14 7 7 0 000-14z" /></svg>}
+        />
+      </div>
+
       {/* ── Charts Row ── */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
 
-        {/* Pipeline Bar Chart */}
+        {/* Performance of Logistics */}
         <div className="card p-4">
           <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">
-            POs per Pipeline Stage
+            Performance of Logistics
           </h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={pipelineData} margin={{ top: 4, right: 4, left: -20, bottom: 70 }}>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={logisticsPerf} margin={{ top: 18, right: 4, left: -20, bottom: 30 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={dark ? '#374151' : '#e5e7eb'} />
-              <XAxis
-                dataKey="name"
-                tick={{ fontSize: 9.5, fill: dark ? '#6b7280' : '#9ca3af' }}
-                angle={-45}
-                textAnchor="end"
-                interval={0}
-              />
+              <XAxis dataKey="name" tick={{ fontSize: 10, fill: dark ? '#6b7280' : '#9ca3af' }} angle={-45} textAnchor="end" interval={0} />
               <YAxis tick={{ fontSize: 11, fill: dark ? '#6b7280' : '#9ca3af' }} allowDecimals={false} />
-              <Tooltip
-                formatter={(v, _n, p) => [v + ' POs', p.payload.full]}
-                contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${dark ? '#374151' : '#e5e7eb'}`, background: dark ? '#1f2937' : '#ffffff', color: dark ? '#f3f4f6' : '#111827' }}
-                cursor={{ fill: 'rgba(249,115,22,0.08)' }}
-              />
-              <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-                {pipelineData.map((entry, i) => (
-                  <Cell key={i} fill={entry.count > 0 ? '#f97316' : '#fed7aa'} />
-                ))}
+              <Tooltip cursor={{ fill: 'rgba(148,163,184,0.08)' }} content={props => <PerfTooltip {...props} doneKey="completed" doneLabel="completed" dark={dark} />} />
+              <Bar dataKey="pending"   stackId="a" name="Pending"   fill={PERF_COLORS.pending} />
+              <Bar dataKey="completed" stackId="a" name="Completed" fill={PERF_COLORS.done} />
+              <Bar dataKey="overdue"   stackId="a" name="Overdue"   fill={PERF_COLORS.overdue} radius={[4, 4, 0, 0]}>
+                <LabelList dataKey="total" position="top" style={{ fontSize: 10, fontWeight: 600, fill: dark ? '#9ca3af' : '#6b7280' }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+          <PerfLegend doneLabel="Completed" />
         </div>
 
-        {/* Avg Days per Stage */}
+        {/* Performance of Rig */}
         <div className="card p-4">
-          <div className="flex items-center gap-3 mb-4">
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
-              Avg Days per Stage
-            </h3>
-            <span className="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" /> longest stage
-            </span>
-          </div>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={avgDaysData} margin={{ top: 4, right: 4, left: -20, bottom: 60 }}>
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">
+            Performance of Rig
+          </h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={rigPerf} margin={{ top: 18, right: 4, left: -20, bottom: 78 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={dark ? '#374151' : '#e5e7eb'} />
-              <XAxis
-                dataKey="name"
-                tick={{ fontSize: 10, fill: dark ? '#6b7280' : '#9ca3af' }}
-                angle={-45}
-                textAnchor="end"
-                interval={0}
-              />
-              <YAxis tick={{ fontSize: 11, fill: dark ? '#6b7280' : '#9ca3af' }} />
-              <Tooltip
-                formatter={(v, _n, p) => [`${v} days`, p.payload.full]}
-                contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${dark ? '#374151' : '#e5e7eb'}`, background: dark ? '#1f2937' : '#ffffff', color: dark ? '#f3f4f6' : '#111827' }}
-                cursor={{ fill: 'rgba(59,130,246,0.08)' }}
-              />
-              <Bar dataKey="days" radius={[4, 4, 0, 0]}>
-                {avgDaysData.map((d, i) => (
-                  <Cell
-                    key={i}
-                    fill={d.days === maxAvgDays && maxAvgDays > 0 ? '#ef4444' : '#3b82f6'}
-                  />
-                ))}
+              <XAxis dataKey="name" tick={{ fontSize: 10, fill: dark ? '#6b7280' : '#9ca3af' }} angle={-45} textAnchor="end" interval={0} />
+              <YAxis tick={{ fontSize: 11, fill: dark ? '#6b7280' : '#9ca3af' }} allowDecimals={false} />
+              <Tooltip cursor={{ fill: 'rgba(148,163,184,0.08)' }} content={props => <PerfTooltip {...props} doneKey="delivered" doneLabel="delivered" dark={dark} />} />
+              <Bar dataKey="pending"   stackId="a" name="Pending"   fill={PERF_COLORS.pending} />
+              <Bar dataKey="delivered" stackId="a" name="Delivered" fill={PERF_COLORS.done} />
+              <Bar dataKey="overdue"   stackId="a" name="Overdue"   fill={PERF_COLORS.overdue} radius={[4, 4, 0, 0]}>
+                <LabelList dataKey="total" position="top" style={{ fontSize: 10, fontWeight: 600, fill: dark ? '#9ca3af' : '#6b7280' }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+          <PerfLegend doneLabel="Delivered" />
         </div>
       </div>
 

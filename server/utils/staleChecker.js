@@ -1,5 +1,59 @@
 const { supabase } = require('./supabaseAdmin')
-const { sendEmail, staleAlertEmail } = require('./email')
+const { sendEmail, staleAlertEmail, reverseLogisticsStaleEmail } = require('./email')
+
+const RL_TERMINAL = new Set(['Delivered to Rig', 'Delivered to Vendor', 'Failed'])
+
+// Flags newly-stale reverse logistics jobs (>threshold past expected return /
+// rig dispatch / created date), emails purchase+admin+rig, and notifies in-app.
+async function checkStaleRLJobs({ overdueDays, emailEnabled }) {
+  try {
+    const { data: jobs } = await supabase.from('reverse_logistics_jobs').select('*')
+    const active = (jobs || []).filter(j => !RL_TERMINAL.has(j.status))
+    if (!active.length) return
+
+    const now = new Date()
+    const baseOf   = j => j.expected_return_date || j.rig_dispatch_date || j.created_at
+    const daysPast = j => { const b = baseOf(j); return b ? Math.floor((now - new Date(b)) / 86400000) : 0 }
+    const newlyStale = active.filter(j => !j.is_stale && baseOf(j) && daysPast(j) > overdueDays)
+    if (!newlyStale.length) return
+
+    await Promise.all(newlyStale.map(j =>
+      supabase.from('reverse_logistics_jobs').update({ is_stale: true }).eq('id', j.id)))
+
+    if (!emailEnabled) {
+      console.log(`RL stale checker: flagged ${newlyStale.length} jobs (emails disabled)`)
+      return
+    }
+
+    // Recipients: all active purchase + admin, plus rig users for that rig.
+    const { data: users } = await supabase
+      .from('users').select('id, email, role, rig_name')
+      .in('role', ['purchase', 'admin', 'rig']).eq('is_active', true)
+
+    for (const j of newlyStale) {
+      const relevant = (users || []).filter(u => u.role !== 'rig' || u.rig_name === j.rig_name)
+      const emails = [...new Set(relevant.map(u => u.email).filter(Boolean))]
+      if (emails.length) {
+        await sendEmail({
+          to: emails,
+          subject: `Overdue Reverse Logistics — ${j.job_type} ${j.job_number}`,
+          html: reverseLogisticsStaleEmail(j, daysPast(j)),
+        })
+      }
+      if (relevant.length) {
+        await supabase.from('notifications').insert(relevant.map(u => ({
+          user_id: u.id, type: 'overdue',
+          title:   `Overdue RL: ${j.job_type} ${j.job_number}`,
+          message: `${j.job_number} for ${j.rig_name} is ${daysPast(j)} days past expected return`,
+          is_read: false, created_at: now.toISOString(),
+        })))
+      }
+    }
+    console.log(`RL stale checker: flagged ${newlyStale.length} reverse logistics jobs`)
+  } catch (err) {
+    console.error('RL stale checker error:', err)
+  }
+}
 
 
 const DEFAULT_OVERDUE_DAYS = 45
@@ -26,6 +80,9 @@ async function loadSettings() {
 async function checkStaleOrders() {
   try {
     const { overdueDays, alertEmails, emailEnabled } = await loadSettings()
+
+    // Reverse logistics staleness runs independently of PO early-returns below.
+    await checkStaleRLJobs({ overdueDays, emailEnabled })
 
     const { data: orders } = await supabase
       .from('po_orders')

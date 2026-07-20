@@ -56,6 +56,15 @@ export const DISPATCH_LOCATION_OPTIONS = [
 // Logistics team codes (mirrors LOGISTICS_CODES) for the Logistics Team Code field.
 export const LOGISTICS_TEAM_CODES = ['SV-01', 'SS-02', 'AK-03', 'KT-04', 'MK-05', 'RS-06']
 
+// ── Reverse Logistics ─────────────────────────────────────────────────────────
+export const RL_JOB_TYPES = ['Repair', 'Return', 'Replacement']
+
+// Outbound-to-rig dispatch (Section 5): 6 base rigs + 6 DD variants (no hubs)
+export const RIG_DISPATCH_OPTIONS = [
+  'Discovery 1', 'Virtue 1', 'Jindal Star', 'Jindal Explorer', 'Jindal Pioneer', 'Jindal Supreme',
+  'Discovery 1 DD', 'Virtue 1 DD', 'Jindal Star DD', 'Jindal Explorer DD', 'Jindal Pioneer DD', 'Jindal Supreme DD',
+]
+
 // Rig "Remarks" dropdown options (CHANGE 7) — free-text details go in Other Remarks
 export const RIG_REMARKS_OPTIONS = [
   'Full Material Received',

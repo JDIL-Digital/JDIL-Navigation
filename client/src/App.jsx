@@ -15,6 +15,8 @@ import AdminLoginPage from './pages/AdminLoginPage'
 import AuthCallback from './pages/AuthCallback'
 import ForgotPasswordPage from './pages/ForgotPasswordPage'
 import ResetPasswordPage from './pages/ResetPasswordPage'
+import ReverseLogisticsPage from './pages/ReverseLogisticsPage'
+import ReverseLogisticsCombinedPage from './pages/ReverseLogisticsCombinedPage'
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, profile, loading, profileLoading } = useAuth()
@@ -88,6 +90,28 @@ function AppRoutes() {
         <Route path="admin" element={
           <ProtectedRoute allowedRoles={['admin']}>
             <AdminPage />
+          </ProtectedRoute>
+        } />
+
+        {/* Reverse Logistics — Repair / Return / Replacement */}
+        <Route path="repair" element={
+          <ProtectedRoute allowedRoles={['purchase', 'logistics', 'rig', 'admin', 'csuite']}>
+            <ReverseLogisticsPage jobType="Repair" />
+          </ProtectedRoute>
+        } />
+        <Route path="return" element={
+          <ProtectedRoute allowedRoles={['purchase', 'logistics', 'rig', 'admin', 'csuite']}>
+            <ReverseLogisticsPage jobType="Return" />
+          </ProtectedRoute>
+        } />
+        <Route path="replacement" element={
+          <ProtectedRoute allowedRoles={['purchase', 'logistics', 'rig', 'admin', 'csuite']}>
+            <ReverseLogisticsPage jobType="Replacement" />
+          </ProtectedRoute>
+        } />
+        <Route path="reverse-logistics" element={
+          <ProtectedRoute allowedRoles={['purchase', 'logistics', 'rig', 'admin', 'csuite']}>
+            <ReverseLogisticsCombinedPage />
           </ProtectedRoute>
         } />
       </Route>

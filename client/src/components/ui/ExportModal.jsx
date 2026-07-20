@@ -36,11 +36,17 @@ const EXPORT_COLUMNS = [
 ]
 
 /**
- * Column-picker + download modal for exporting the currently-filtered POs.
- * Props: tab ('Purchase'|'Logistics'|'Rig'), rows (already filtered), onClose.
+ * Column-picker + download modal for exporting currently-filtered rows.
+ * Props:
+ *   tab      — filename segment + sheet name (e.g. 'Purchase', 'Repair')
+ *   rows     — already-filtered rows
+ *   onClose
+ *   columns  — optional custom column defs [{ key, label, get }]. Defaults to
+ *              the PO column set (Local Purchase), keeping existing calls intact.
  */
-export default function ExportModal({ tab = 'Export', rows = [], onClose }) {
-  const [selected, setSelected] = useState(() => new Set(EXPORT_COLUMNS.map(c => c.key)))
+export default function ExportModal({ tab = 'Export', rows = [], onClose, columns }) {
+  const COLS = columns || EXPORT_COLUMNS
+  const [selected, setSelected] = useState(() => new Set(COLS.map(c => c.key)))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -51,13 +57,13 @@ export default function ExportModal({ tab = 'Export', rows = [], onClose }) {
       return next
     })
   }
-  const allOn = selected.size === EXPORT_COLUMNS.length
+  const allOn = selected.size === COLS.length
   function toggleAll() {
-    setSelected(allOn ? new Set() : new Set(EXPORT_COLUMNS.map(c => c.key)))
+    setSelected(allOn ? new Set() : new Set(COLS.map(c => c.key)))
   }
 
   async function handleDownload() {
-    const cols = EXPORT_COLUMNS.filter(c => selected.has(c.key))
+    const cols = COLS.filter(c => selected.has(c.key))
     if (cols.length === 0) { setError('Select at least one column.'); return }
     setBusy(true); setError('')
     try {
@@ -101,7 +107,7 @@ export default function ExportModal({ tab = 'Export', rows = [], onClose }) {
             </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-            {EXPORT_COLUMNS.map(c => (
+            {COLS.map(c => (
               <label key={c.key} className="flex items-center gap-2 cursor-pointer py-1 px-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50">
                 <input
                   type="checkbox"

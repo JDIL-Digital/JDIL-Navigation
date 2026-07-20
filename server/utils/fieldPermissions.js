@@ -52,4 +52,55 @@ function validateUpdateFields(role, updateBody) {
   return { ok: true }
 }
 
-module.exports = { ROLE_EDITABLE_FIELDS, SYSTEM_FIELDS, canEditField, canCreatePO, validateUpdateFields }
+// ─── Reverse Logistics field permissions ─────────────────────────────────────
+const RL_ROLE_EDITABLE_FIELDS = {
+  rig: [
+    // Section 1 — Rig dispatch
+    'material_description_2', 'rig_dispatch_date', 'rig_dispatch_location', 'rig_mode_of_transport',
+    // Section 6 — Rig receives
+    'rig_received_date', 'rig_remarks', 'rig_other_remarks',
+  ],
+  logistics: [
+    // Section 2 — Inbound from rig
+    'jdil_in_logistics_code', 'jdil_in_received_date', 'jdil_in_received_location',
+    'jdil_in_dispatch_date', 'jdil_in_dispatch_location', 'jdil_in_mode_of_transport', 'jdil_in_remarks',
+    'jdil_in_dc_bkc', 'jdil_in_dc_taloja', 'jdil_in_dc_nhava', 'jdil_in_dc_nagothane',
+    // Section 5 — Outbound to rig
+    'jdil_out_received_date', 'jdil_out_received_location', 'jdil_out_dispatch_date',
+    'jdil_out_dispatch_location', 'jdil_out_dc_number', 'jdil_out_mode_of_transport',
+  ],
+  purchase: [
+    // Section 3 — Vendor received
+    'vendor_name', 'vendor_contact', 'vendor_phone', 'vendor_received_date',
+    // Section 4 — Vendor ship back
+    'repair_description', 'expected_return_date', 'vendor_dispatch_date',
+    'vendor_dispatch_location', 'vendor_mode_of_transport',
+  ],
+  admin: null,   // all fields
+  csuite: [],    // read-only
+}
+
+// Never accepted from a client update — system/meta or create-only.
+const RL_SYSTEM_FIELDS = new Set([
+  'id', 'job_type', 'job_number', 'mr_number', 'po_number', 'rig_name', 'status',
+  'is_stale', 'created_by', 'created_at', 'updated_at',
+])
+
+function canEditRLField(role, fieldKey) {
+  if (RL_SYSTEM_FIELDS.has(fieldKey)) return false
+  const allowed = RL_ROLE_EDITABLE_FIELDS[role]
+  if (allowed === null) return true
+  if (!allowed || allowed.length === 0) return false
+  return allowed.includes(fieldKey)
+}
+
+function validateRLUpdateFields(role, updateBody) {
+  const forbidden = Object.keys(updateBody).filter(k => !canEditRLField(role, k))
+  if (forbidden.length > 0) return { ok: false, forbidden }
+  return { ok: true }
+}
+
+module.exports = {
+  ROLE_EDITABLE_FIELDS, SYSTEM_FIELDS, canEditField, canCreatePO, validateUpdateFields,
+  RL_ROLE_EDITABLE_FIELDS, RL_SYSTEM_FIELDS, canEditRLField, validateRLUpdateFields,
+}

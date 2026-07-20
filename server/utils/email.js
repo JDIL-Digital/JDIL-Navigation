@@ -402,6 +402,35 @@ function partialDeliveryEmail(po, item) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 7. Overdue Reverse Logistics job
+// ─────────────────────────────────────────────────────────────────────────────
+function reverseLogisticsStaleEmail(job, days) {
+  const body = `
+    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px 18px;margin-bottom:22px">
+      <p style="margin:0;font-size:14px;color:#991b1b;line-height:1.5">
+        &#9888;&#65039; Job <strong>${job.job_number}</strong> for <strong>${job.rig_name}</strong> is
+        <strong style="color:#dc2626">${days} days past its expected return date</strong>.
+        Vendor: <strong>${job.vendor_name || '—'}</strong>. Please follow up.
+      </p>
+    </div>
+
+    ${sectionHead('Reverse Logistics Job')}
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;border-collapse:collapse">
+      ${detailRow('Job Type',             job.job_type, true)}
+      ${detailRow('Job Number',           job.job_number)}
+      ${detailRow('Rig / Location',       job.rig_name)}
+      ${detailRow('Vendor',               job.vendor_name)}
+      ${detailRow('Rig Dispatch Date',    fmtDate(job.rig_dispatch_date))}
+      ${detailRow('Expected Return Date', fmtDate(job.expected_return_date))}
+      ${detailRow('Current Status',       job.status)}
+    </table>
+
+    ${ctaButton('Review in JDIL Navigation', `${APP_URL}/reverse-logistics`, '#dc2626')}
+  `
+  return emailBase('&#9888;&#65039; Overdue Reverse Logistics', body)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 module.exports = {
   sendEmail,
   newPOEmail,
@@ -410,4 +439,5 @@ module.exports = {
   accountApprovedEmail,
   newRegistrationEmail,
   partialDeliveryEmail,
+  reverseLogisticsStaleEmail,
 }
