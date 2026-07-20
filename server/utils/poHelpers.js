@@ -47,4 +47,40 @@ function overdueDays(po) {
   return Math.floor((Date.now() - new Date(base).getTime()) / 86400000)
 }
 
-module.exports = { calcStatus, getDisplayStatus, daysElapsed, overdueDays }
+// ── Reverse Logistics status (latest filled field wins) ───────────────────────
+function calcReverseLogisticsStatus(job) {
+  if (!job) return 'Job Created'
+  if (job.status === 'Failed') return 'Failed'
+
+  if (job.job_type === 'Return') {
+    if (job.vendor_received_date) return 'Delivered to Vendor'
+    if (job.rig_dispatch_date)    return 'Dispatched from Rig'
+    return 'Job Created'
+  }
+
+  if (job.rig_received_date)      return 'Delivered to Rig'
+  if (job.jdil_out_dispatch_date) return 'In Transit to Rig'
+  if (job.jdil_out_received_date) return 'Back at JDIL'
+  if (job.vendor_dispatch_date)  return job.job_type === 'Replacement' ? 'Replacement Ready' : 'Repair Complete'
+  if (job.vendor_received_date)  return 'At Vendor'
+  if (job.jdil_in_received_date) return 'At JDIL Location'
+  if (job.rig_dispatch_date)     return 'Dispatched from Rig'
+  return 'Job Created'
+}
+
+function getRLDisplayStatus(job) {
+  const s = calcReverseLogisticsStatus(job)
+  switch (s) {
+    case 'Dispatched from Rig':  return job.rig_dispatch_location    ? `Dispatched to ${job.rig_dispatch_location}` : s
+    case 'At JDIL Location':     return job.jdil_in_received_location  ? `At ${job.jdil_in_received_location}` : s
+    case 'At Vendor':            return job.vendor_name              ? `At ${job.vendor_name}` : s
+    case 'Repair Complete':
+    case 'Replacement Ready':    return job.vendor_dispatch_location  ? `In Transit to ${job.vendor_dispatch_location}` : s
+    case 'Back at JDIL':         return job.jdil_out_received_location ? `At ${job.jdil_out_received_location}` : s
+    case 'In Transit to Rig':    return job.jdil_out_dispatch_location ? `In Transit to ${job.jdil_out_dispatch_location}` : s
+    case 'Delivered to Vendor':  return job.vendor_name              ? `At ${job.vendor_name}` : s
+    default:                     return s
+  }
+}
+
+module.exports = { calcStatus, getDisplayStatus, daysElapsed, overdueDays, calcReverseLogisticsStatus, getRLDisplayStatus }
