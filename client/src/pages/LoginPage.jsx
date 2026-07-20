@@ -8,7 +8,7 @@ import { useTheme } from '../context/ThemeContext'
 import { isAllowedEmail, DOMAIN_ERROR, recordFailedAttempt } from '../utils/authValidation'
 
 export default function LoginPage() {
-  const { verifyPassword, sendOTP, verifyOTP } = useAuth()
+  const { signIn, sendOTP, verifyOTP } = useAuth()
   const { dark, toggle } = useTheme()
   const navigate = useNavigate()
 
@@ -73,34 +73,29 @@ export default function LoginPage() {
     }
   }, [step, navigate])
 
-  // ── Step 1: verify domain + password, then send OTP ──────────────────────
+  // ── Password login (direct) ───────────────────────────────────────────────
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
-
-    if (!isAllowedEmail(email)) {
-      setError(DOMAIN_ERROR)
-      return
-    }
+    if (!isAllowedEmail(email)) { setError(DOMAIN_ERROR); return }
 
     setLoading(true)
+    const { error: pwErr } = await signIn(email, password)
+    setLoading(false)
+    if (pwErr) { setError(pwErr.message); return }
+    // Success — onAuthStateChange fires, ProtectedRoute takes over
+    navigate('/')
+  }
 
-    // Confirm credentials first (signs in then immediately signs out)
-    const { error: pwErr } = await verifyPassword(email, password)
-    if (pwErr) {
-      setError(pwErr.message)
-      setLoading(false)
-      return
-    }
+  // ── OTP login (passwordless) — email a 6-digit code ───────────────────────
+  async function handleSendOTP() {
+    setError('')
+    if (!isAllowedEmail(email)) { setError(DOMAIN_ERROR); return }
 
-    // Send OTP
+    setLoading(true)
     const { error: otpErr } = await sendOTP(email)
     setLoading(false)
-    if (otpErr) {
-      setError(`Could not send verification code: ${otpErr.message}`)
-      return
-    }
-
+    if (otpErr) { setError(`Could not send code: ${otpErr.message}`); return }
     setStep('otp')
   }
 
@@ -244,8 +239,29 @@ export default function LoginPage() {
                   {loading && (
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   )}
-                  {loading ? 'Sending code…' : 'Continue'}
+                  {loading ? 'Signing in…' : 'Sign In'}
                 </button>
+
+                {/* OTP alternative */}
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
+                  <span className="text-xs text-gray-400 dark:text-gray-500">or</span>
+                  <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSendOTP}
+                  disabled={loading}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-jdil-green/50 text-jdil-green font-medium text-sm hover:bg-jdil-green/5 transition-colors disabled:opacity-60"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                  Email me a 6-digit code
+                </button>
+                <p className="text-center text-xs text-gray-400 dark:text-gray-500">
+                  Faster login: use the 6-digit code from your email instead of clicking a link.
+                </p>
               </form>
 
               <p className="text-center text-sm text-gray-500 dark:text-gray-400 mt-6">

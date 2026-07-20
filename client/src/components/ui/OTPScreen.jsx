@@ -32,10 +32,12 @@ export default function OTPScreen({
   darkTheme = false,
 }) {
   const [digits, setDigits]           = useState(Array(OTP_LENGTH).fill(''))
-  const [resendSec, setResendSec]     = useState(60)
+  const [resendSec, setResendSec]     = useState(30)   // 30-second resend cooldown
+  const [expirySec, setExpirySec]     = useState(600)  // 10-minute code lifetime
   const [lockInfo, setLockInfo]       = useState(() => checkLock(email))
   const [lockMs, setLockMs]           = useState(() => lockInfo.locked ? lockInfo.remainingMs : 0)
   const inputRefs                     = useRef([])
+  const submittedRef                  = useRef('')     // last auto-submitted code
 
   // Auto-focus first box on mount
   useEffect(() => { inputRefs.current[0]?.focus() }, [])
@@ -46,6 +48,13 @@ export default function OTPScreen({
     const id = setInterval(() => setResendSec(s => s - 1), 1000)
     return () => clearInterval(id)
   }, [resendSec])
+
+  // Code-expiry countdown
+  useEffect(() => {
+    if (expirySec <= 0) return
+    const id = setInterval(() => setExpirySec(s => (s > 0 ? s - 1 : 0)), 1000)
+    return () => clearInterval(id)
+  }, [expirySec])
 
   // Lock countdown — polls checkLock every second while locked
   useEffect(() => {
@@ -103,7 +112,9 @@ export default function OTPScreen({
   }
 
   function handleResendClick() {
-    setResendSec(60)
+    setResendSec(30)
+    setExpirySec(600)
+    submittedRef.current = ''
     setDigits(Array(OTP_LENGTH).fill(''))
     inputRefs.current[0]?.focus()
     onResend?.()
@@ -113,6 +124,17 @@ export default function OTPScreen({
   const otpValue = digits.join('')
   const isLocked = lockInfo.locked
   const canVerify = otpValue.length === OTP_LENGTH && !loading && !isLocked
+
+  // Auto-submit once all 6 digits are entered (guard against re-submitting the
+  // same code, e.g. after an error clears loading).
+  useEffect(() => {
+    if (otpValue.length === OTP_LENGTH && !loading && !isLocked && submittedRef.current !== otpValue) {
+      submittedRef.current = otpValue
+      onVerify?.(otpValue)
+    }
+    if (otpValue.length < OTP_LENGTH) submittedRef.current = ''
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otpValue, loading, isLocked])
 
   // ── Dynamic classes ───────────────────────────────────────────────────────
   const inputCls = darkTheme
@@ -138,7 +160,9 @@ export default function OTPScreen({
           We sent a 6-digit verification code to
         </p>
         <p className="text-sm font-medium text-jdil-green mt-0.5 break-all text-center">{email}</p>
-        <p className={`text-xs ${mutedCls} mt-1`}>Code expires in 10 minutes.</p>
+        <p className={`text-xs ${mutedCls} mt-1`}>
+          {expirySec > 0 ? <>Code expires in <strong>{formatCountdown(expirySec * 1000)}</strong></> : 'Code expired — request a new one.'}
+        </p>
       </div>
 
       {/* Lockout banner */}

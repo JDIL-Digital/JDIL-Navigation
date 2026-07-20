@@ -76,16 +76,11 @@ export function AuthProvider({ children }) {
    * Uses Supabase Email OTP (signInWithOtp).
    */
   async function sendOTP(email) {
-    // The email contains BOTH a 6-digit code (entered in the original tab) and
-    // a magic link. Point the magic link at /auth/callback so the tab it opens
-    // can confirm the session and then self-close, leaving the original tab
-    // logged in. The 6-digit OTP entry flow continues to work unchanged.
-    const redirectTo = typeof window !== 'undefined'
-      ? `${window.location.origin}/auth/callback`
-      : undefined
+    // Send a 6-digit code only (no magic link). The Supabase email template uses
+    // {{ .Token }}; omitting emailRedirectTo keeps this a pure code flow.
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { shouldCreateUser: false, emailRedirectTo: redirectTo },
+      options: { shouldCreateUser: false },
     })
     return { error }
   }
