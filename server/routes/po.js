@@ -50,6 +50,36 @@ router.get('/', requireAuth, async (req, res) => {
   res.json(data)
 })
 
+// ─── GET delivered POs for Reverse Logistics search ──────────────────────────
+// Must be declared BEFORE '/:id' so it isn't captured as an id.
+router.get('/search-delivered', requireAuth, async (req, res) => {
+  // Strip characters that would break the PostgREST .or() / ilike filter.
+  const q = String(req.query.q || '').replace(/[%,()]/g, ' ').trim()
+  if (q.length < 2) return res.json([])
+
+  // Delivered items only; search across ALL rigs (inter-rig transfers happen).
+  const { data: pos, error } = await supabase
+    .from('po_orders')
+    .select('id, po_number, mr_number, rig_name, vendor_name, vendor_contact_name, vendor_phone_number, delivered_to_rig_date, material_description, material_description_2')
+    .not('delivered_to_rig_date', 'is', null)
+    .or(`po_number.ilike.%${q}%,mr_number.ilike.%${q}%,vendor_name.ilike.%${q}%`)
+    .order('delivered_to_rig_date', { ascending: false })
+    .limit(10)
+  if (error) return res.status(500).json({ error: error.message })
+
+  const ids = (pos || []).map(p => p.id)
+  const itemsByPo = {}
+  if (ids.length) {
+    const { data: items } = await supabase
+      .from('po_line_items')
+      .select('id, po_id, item_name, material_description, quantity_ordered, unit')
+      .in('po_id', ids)
+      .order('created_at', { ascending: true })
+    ;(items || []).forEach(it => { (itemsByPo[it.po_id] = itemsByPo[it.po_id] || []).push(it) })
+  }
+  res.json((pos || []).map(p => ({ ...p, line_items: itemsByPo[p.id] || [] })))
+})
+
 // ─── GET single PO ──────────────────────────────────────────────────────────
 router.get('/:id', requireAuth, async (req, res) => {
   const { data, error } = await supabase
