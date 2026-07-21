@@ -70,7 +70,8 @@ export const RL_ROLE_EDITABLE_FIELDS = {
 
 const RL_SYSTEM_FIELDS = new Set([
   'id', 'job_type', 'job_number', 'mr_number', 'po_number', 'rig_name', 'status',
-  'is_stale', 'created_by', 'created_at', 'updated_at',
+  'is_stale', 'source_po_id', 'source_line_item_id', 'is_external_item',
+  'created_by', 'created_at', 'updated_at',
 ])
 
 export function canEditRLField(role, fieldKey) {

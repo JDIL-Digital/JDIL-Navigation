@@ -51,10 +51,13 @@ router.post('/jobs', requireAuth, async (req, res) => {
   const raw = { ...req.body }
   const items = Array.isArray(raw.line_items) ? raw.line_items : []
 
-  // Explicit creation allowlist (rig-stage + identifiers only)
+  // Explicit creation allowlist (rig-stage + identifiers + optional source link
+  // and pre-filled vendor details when created from a delivered PO).
   const KEEP = new Set([
     'job_type', 'mr_number', 'po_number', 'rig_name', 'material_description_2',
     'rig_dispatch_date', 'rig_dispatch_location', 'rig_mode_of_transport',
+    'vendor_name', 'vendor_contact', 'vendor_phone',
+    'source_po_id', 'source_line_item_id', 'is_external_item',
   ])
   const body = {}
   Object.keys(raw).forEach(k => { if (KEEP.has(k)) body[k] = raw[k] })

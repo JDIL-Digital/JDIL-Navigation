@@ -87,8 +87,20 @@ export default function ReverseLogisticsDetailPanel({ job, onClose, onSave }) {
   const [itemsMsg, setItemsMsg] = useState('')
   const [failOpen, setFailOpen] = useState(false)
   const [failReason, setFailReason] = useState('')
+  const [sourcePO, setSourcePO] = useState(null)
 
   useEffect(() => { setForm({ ...job }); setPending({}) }, [job])
+
+  // Fetch the linked source PO (for the banner) when this job has one.
+  useEffect(() => {
+    setSourcePO(null)
+    if (!job?.source_po_id) return
+    supabase.from('po_orders')
+      .select('id, po_number, delivered_to_rig_date')
+      .eq('id', job.source_po_id).single()
+      .then(({ data }) => { if (data) setSourcePO(data) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id])
 
   async function loadItems() {
     const { data } = await supabase.from('reverse_logistics_line_items')
@@ -274,6 +286,19 @@ export default function ReverseLogisticsDetailPanel({ job, onClose, onSave }) {
             </button>
           )}
         </div>
+
+        {/* Source-PO / external-item banner */}
+        {job.source_po_id ? (
+          <div className="px-5 py-2.5 bg-jdil-green/5 border-b border-jdil-green/20 text-xs text-jdil-green flex items-center gap-1.5">
+            <span>🔗</span>
+            <span>Linked to original PO: <strong>{sourcePO?.po_number || '…'}</strong>{sourcePO?.delivered_to_rig_date ? ` (delivered ${formatDate(sourcePO.delivered_to_rig_date)})` : ''}</span>
+          </div>
+        ) : job.is_external_item ? (
+          <div className="px-5 py-2.5 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-700/40 text-xs text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
+            <span>⚠</span>
+            <span>External item — not linked to any JDIL Navigation PO</span>
+          </div>
+        ) : null}
 
         {/* Sections */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
