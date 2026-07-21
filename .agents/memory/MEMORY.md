@@ -1,0 +1,1 @@
+- [GitHub sync workflow](github-sync.md) — repo pulled via tarball (git blocked); ws Node 20 patch must be re-applied to server/utils/supabaseAdmin.js after every pull; never overwrite .replit.
