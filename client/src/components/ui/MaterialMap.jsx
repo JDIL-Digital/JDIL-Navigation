@@ -1,10 +1,24 @@
+import { useEffect } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Tooltip, Popup } from 'react-leaflet'
 import { RIG_COORDINATES, HUB_COORDINATES } from '../../utils/constants'
 import { calcStatus } from '../../utils/helpers'
 import { useTheme } from '../../context/ThemeContext'
 
+const LEAFLET_CSS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
+
+function useLeafletCSS() {
+  useEffect(() => {
+    if (document.querySelector(`link[href="${LEAFLET_CSS}"]`)) return
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = LEAFLET_CSS
+    document.head.appendChild(link)
+  }, [])
+}
+
 export default function MaterialMap({ poOrders = [] }) {
   const { dark } = useTheme()
+  useLeafletCSS()
 
   // Count open (non-delivered) POs per rig
   const rigCounts = {}
