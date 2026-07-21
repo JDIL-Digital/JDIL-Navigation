@@ -1,0 +1,8 @@
+User-agent: *
+Disallow: /login
+Disallow: /admin-login
+Disallow: /register
+Disallow: /forgot-password
+Disallow: /reset-password
+Disallow: /pending
+Disallow: /auth/callback

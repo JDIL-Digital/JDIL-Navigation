@@ -63,11 +63,41 @@ if (IS_PROD) {
   const clientDist = path.join(__dirname, '../client/dist')
 
   // Serve static assets (JS, CSS, images, etc.)
+  // robots.txt is emitted into dist by Vite from client/public/ and is served here.
   app.use(express.static(clientDist))
 
-  // Any non-API route gets the React index.html so client-side routing works
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(clientDist, 'index.html'))
+  // Governance endpoints that are NOT published as static files must return a
+  // real 404 — never the SPA shell — so crawlers see an honest response.
+  app.get('/sitemap.xml', (_req, res) => res.status(404).end())
+  app.get('/llms.txt',    (_req, res) => res.status(404).end())
+
+  // Known client-side routes that should receive the SPA shell.
+  const CLIENT_ROUTES = [
+    '/',
+    '/login',
+    '/admin-login',
+    '/register',
+    '/pending',
+    '/auth/callback',
+    '/forgot-password',
+    '/reset-password',
+    '/purchase',
+    '/logistics',
+    '/rig',
+    '/admin',
+    '/repair',
+    '/return',
+    '/replacement',
+    '/reverse-logistics',
+  ]
+
+  // Only serve index.html for known routes; return a real 404 for everything
+  // else so search engines do not treat unknown URLs as valid pages.
+  app.get('*', (req, res) => {
+    if (CLIENT_ROUTES.includes(req.path)) {
+      return res.sendFile(path.join(clientDist, 'index.html'))
+    }
+    res.status(404).end()
   })
 
   console.log(`[server] Serving React build from ${clientDist}`)
