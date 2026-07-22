@@ -11,7 +11,7 @@ Direct git commands (fetch/pull/merge/reset) are blocked for the main agent in t
 3. `rm -f .replit` in the extracted dir, then `cp -rf . /home/runner/workspace/` — never overwrite the workspace `.replit` (owned by Replit tooling; direct edits are also blocked).
 
 **After every pull, re-apply the ws patch:**
-Upstream `server/utils/supabaseAdmin.js` lacks the Node 20 fix. Without it the server crashes: "Node.js 20 detected without native WebSocket support." Re-add `const ws = require('ws')` and `realtime: { transport: ws }` to createClient, and ensure `ws` is installed in /server.
+Upstream `server/utils/supabaseAdmin.js` lacks the Node 20 fix. Without it the server crashes: "Node.js 20 detected without native WebSocket support." Re-add `const ws = require('ws')` and `realtime: { transport: ws }` to createClient, and ensure `ws` is listed in server/package.json dependencies (`npm install ws --save` in /server) — deployments install only from package.json, so a workspace-only install crash-loops production with "Cannot find module 'ws'".
 **Why:** Repl runs Node 20; @supabase/realtime-js requires native WebSocket (Node 22+) or an explicit ws transport.
 
 **Then:** `npm install` in /server and /client, `npm run build` in /client (server serves client/dist in production), restart the "Start application" workflow, verify HTTP 200 on :5000 and /api/health.
