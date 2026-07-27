@@ -7,7 +7,7 @@ import OTPScreen from '../components/ui/OTPScreen'
 import { isAllowedEmail, DOMAIN_ERROR, recordFailedAttempt } from '../utils/authValidation'
 
 export default function AdminLoginPage() {
-  const { signIn, sendOTP, verifyOTP } = useAuth()
+  const { verifyPassword, sendOTP, verifyOTP } = useAuth()
   const navigate = useNavigate()
 
   const [email, setEmail]       = useState('')
@@ -48,17 +48,20 @@ export default function AdminLoginPage() {
     }
   }, [step, navigate])
 
-  // ── Password login (direct) ───────────────────────────────────────────────
+  // ── Password + OTP (2FA): validate password, then send a 6-digit code ─────
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
     if (!isAllowedEmail(email)) { setError(DOMAIN_ERROR); return }
 
     setLoading(true)
-    const { error: pwErr } = await signIn(email, password)
+    const { error: pwErr } = await verifyPassword(email, password)
+    if (pwErr) { setError(pwErr.message); setLoading(false); return }
+
+    const { error: otpErr } = await sendOTP(email)
     setLoading(false)
-    if (pwErr) { setError(pwErr.message); return }
-    navigate('/admin')
+    if (otpErr) { setError(`Could not send code: ${otpErr.message}`); return }
+    setStep('otp')
   }
 
   // ── OTP login (passwordless) ──────────────────────────────────────────────
@@ -225,7 +228,7 @@ export default function AdminLoginPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
                     </svg>
                   )}
-                  {loading ? 'Signing in…' : 'Sign In'}
+                  {loading ? 'Sending code…' : 'Sign In'}
                 </button>
 
                 {/* OTP alternative */}

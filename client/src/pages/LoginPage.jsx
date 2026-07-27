@@ -8,7 +8,7 @@ import { useTheme } from '../context/ThemeContext'
 import { isAllowedEmail, DOMAIN_ERROR, recordFailedAttempt } from '../utils/authValidation'
 
 export default function LoginPage() {
-  const { signIn, sendOTP, verifyOTP } = useAuth()
+  const { verifyPassword, sendOTP, verifyOTP } = useAuth()
   const { dark, toggle } = useTheme()
   const navigate = useNavigate()
 
@@ -73,18 +73,22 @@ export default function LoginPage() {
     }
   }, [step, navigate])
 
-  // ── Password login (direct) ───────────────────────────────────────────────
+  // ── Password + OTP (2FA): validate password, then send a 6-digit code ─────
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
     if (!isAllowedEmail(email)) { setError(DOMAIN_ERROR); return }
 
     setLoading(true)
-    const { error: pwErr } = await signIn(email, password)
+    // Confirm credentials without creating a lasting session.
+    const { error: pwErr } = await verifyPassword(email, password)
+    if (pwErr) { setError(pwErr.message); setLoading(false); return }
+
+    // Password OK → send the OTP and move to the code screen.
+    const { error: otpErr } = await sendOTP(email)
     setLoading(false)
-    if (pwErr) { setError(pwErr.message); return }
-    // Success — onAuthStateChange fires, ProtectedRoute takes over
-    navigate('/')
+    if (otpErr) { setError(`Could not send code: ${otpErr.message}`); return }
+    setStep('otp')
   }
 
   // ── OTP login (passwordless) — email a 6-digit code ───────────────────────
@@ -239,7 +243,7 @@ export default function LoginPage() {
                   {loading && (
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   )}
-                  {loading ? 'Signing in…' : 'Sign In'}
+                  {loading ? 'Sending code…' : 'Sign In'}
                 </button>
 
                 {/* OTP alternative */}

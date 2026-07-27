@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
-import { calcStatus, overdueDays } from '../utils/helpers'
+import { calcStatus, isPurchaseStale, isDeliveryStale } from '../utils/helpers'
 import { OVERDUE_DAYS } from '../utils/constants'
 import POTable from '../components/ui/POTable'
 import PODetailPanel from '../components/ui/PODetailPanel'
@@ -27,8 +27,12 @@ const QUICK_FILTERS = {
     predicate: o => calcStatus(o) !== 'Delivered to Rig',
   },
   'stale': {
-    label: `Stale (> ${OVERDUE_DAYS}d past promised)`,
-    predicate: o => overdueDays(o) > OVERDUE_DAYS && calcStatus(o) !== 'Delivered to Rig',
+    label: `Stale (> ${OVERDUE_DAYS}d in purchase)`,
+    predicate: o => isPurchaseStale(o, OVERDUE_DAYS),
+  },
+  'delayed-delivery': {
+    label: `Delayed delivery (> ${OVERDUE_DAYS}d in logistics)`,
+    predicate: o => isDeliveryStale(o, OVERDUE_DAYS),
   },
   'items-pending': {
     label: 'Items pending delivery',

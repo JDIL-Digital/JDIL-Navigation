@@ -1,4 +1,4 @@
-import { PO_STATUSES } from './constants'
+import { PO_STATUSES, PURCHASE_STAGES, LOGISTICS_STAGES } from './constants'
 
 export function formatDate(dateStr) {
   if (!dateStr) return '—'
@@ -130,6 +130,16 @@ export function overdueDays(po) {
 export function isOverdue(po, threshold = 45) {
   if (calcStatus(po) === 'Delivered to Rig') return false
   return overdueDays(po) > threshold
+}
+
+// STALE = overdue AND still in a PURCHASE-owned stage (purchase's responsibility).
+export function isPurchaseStale(po, threshold = 45) {
+  return PURCHASE_STAGES.includes(calcStatus(po)) && overdueDays(po) > threshold
+}
+
+// DELAYED DELIVERY = overdue AND in a LOGISTICS-owned stage, not yet delivered.
+export function isDeliveryStale(po, threshold = 45) {
+  return LOGISTICS_STAGES.includes(calcStatus(po)) && !po.delivered_to_rig_date && overdueDays(po) > threshold
 }
 
 export function generateMRNumber(existingCount) {

@@ -6,8 +6,8 @@ import {
 } from 'recharts'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
-import { calcStatus, daysElapsed, overdueDays } from '../utils/helpers'
-import { PO_RIG_OPTIONS, OVERDUE_DAYS, LOGISTICS_TEAM_CODES } from '../utils/constants'
+import { calcStatus, daysElapsed, overdueDays, isPurchaseStale, isDeliveryStale } from '../utils/helpers'
+import { PO_RIG_OPTIONS, OVERDUE_DAYS, LOGISTICS_LOCATION_GROUPS, PURCHASE_STAGES, LOGISTICS_STAGES } from '../utils/constants'
 import KPICard from '../components/ui/KPICard'
 import MaterialMap from '../components/ui/MaterialMap'
 import ReportsDropdown from '../components/ui/ReportsDropdown'
@@ -29,6 +29,11 @@ function PerfTooltip({ active, payload, doneKey, doneLabel, dark }) {
       <span style={{ fontWeight: 600 }}>{d.name}: {d.total} total</span>
       {' | '}{d.pending} pending{' | '}{d[doneKey]} {doneLabel}
       {' | '}<span style={{ color: '#EF4444' }}>{d.overdue} overdue</span>
+      {Array.isArray(d.perCode) && d.perCode.length > 0 && (
+        <div style={{ marginTop: 4, opacity: 0.85 }}>
+          {d.perCode.map(c => `${c.code}: ${c.pending + c.completed + c.overdue} (${c.pending}P/${c.completed}D/${c.overdue}O)`).join(', ')}
+        </div>
+      )}
     </div>
   )
 }
@@ -180,8 +185,10 @@ export default function Dashboard() {
     // 3. Open POs
     const openCount = openPOs.length
 
-    // 4. Stale POs (open + more than OVERDUE_DAYS past promised ready date)
-    const staleCount = openPOs.filter(o => overdueDays(o) > OVERDUE_DAYS).length
+    // 4. Stale POs — overdue AND still in a purchase-owned stage
+    const staleCount     = filtered.filter(o => isPurchaseStale(o, OVERDUE_DAYS)).length
+    // 4b. Delayed deliveries — overdue AND stuck in a logistics-owned stage
+    const delayedCount   = filtered.filter(o => isDeliveryStale(o, OVERDUE_DAYS)).length
 
     // 5. Vendor score — average of per-vendor on-time %
     const vendorMap = {}
@@ -199,19 +206,25 @@ export default function Dashboard() {
       ? Math.round(vendorScores.reduce((a, b) => a + b, 0) / vendorScores.length)
       : null
 
-    return { onTimePct, avgCycle, openCount, staleCount, avgVendorScore }
+    return { onTimePct, avgCycle, openCount, staleCount, delayedCount, avgVendorScore }
   }, [filtered, openPOs, deliveredPOs])
 
-  // ── Performance of Logistics (all-time, from full orders set) ─────────────
+  // ── Performance of Logistics (grouped by location) ────────────────────────
   const logisticsPerf = useMemo(() => {
     const PENDING = new Set(['At JDIL Location', 'Vendor Confirmed', 'PO Released', 'Buyer Assigned', 'MR Created'])
-    return LOGISTICS_TEAM_CODES.map(code => {
+    const countsFor = code => {
       const mine = orders.filter(o => o.logistics_team_code === code)
       const completed = mine.filter(o => o.dispatch_date).length
       const pendingList = mine.filter(o => !o.dispatch_date && PENDING.has(calcStatus(o)))
       const overdue = pendingList.filter(o => overdueDays(o) > OVERDUE_DAYS).length
-      const pending = pendingList.length - overdue
-      return { name: code, pending, completed, overdue, total: pending + completed + overdue }
+      return { code, pending: pendingList.length - overdue, completed, overdue }
+    }
+    return Object.entries(LOGISTICS_LOCATION_GROUPS).map(([label, codes]) => {
+      const perCode = codes.map(countsFor)
+      const pending   = perCode.reduce((s, c) => s + c.pending, 0)
+      const completed = perCode.reduce((s, c) => s + c.completed, 0)
+      const overdue   = perCode.reduce((s, c) => s + c.overdue, 0)
+      return { name: label, pending, completed, overdue, total: pending + completed + overdue, perCode }
     })
   }, [orders])
 
@@ -250,8 +263,8 @@ export default function Dashboard() {
   // ── Status distribution (donut) ───────────────────────────────────────────
   const statusDist = useMemo(() => {
     const delivered    = filtered.filter(o => calcStatus(o) === 'Delivered to Rig').length
-    const stale        = openPOs.filter(o => overdueDays(o) > OVERDUE_DAYS).length
-    const nonStale     = openPOs.filter(o => overdueDays(o) <= OVERDUE_DAYS)
+    const stale        = openPOs.filter(o => isPurchaseStale(o, OVERDUE_DAYS)).length
+    const nonStale     = openPOs.filter(o => !isPurchaseStale(o, OVERDUE_DAYS))
     const inTransit    = nonStale.filter(o => ['In Transit to Rig','In Transit to JDIL'].includes(calcStatus(o))).length
     const atJDIL       = nonStale.filter(o => calcStatus(o) === 'At JDIL Location').length
     const readyVendor  = nonStale.filter(o => calcStatus(o) === 'Material Ready at Vendor').length
@@ -269,7 +282,7 @@ export default function Dashboard() {
   // ── Top 10 stale POs ─────────────────────────────────────────────────────
   const stalePOList = useMemo(() =>
     openPOs
-      .filter(o => overdueDays(o) > OVERDUE_DAYS)
+      .filter(o => isPurchaseStale(o, OVERDUE_DAYS))
       .sort((a, b) => overdueDays(b) - overdueDays(a))
       .slice(0, 10),
     [openPOs]
@@ -379,6 +392,14 @@ export default function Dashboard() {
           color="red"
           onClick={() => goToPurchase('stale')}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>}
+        />
+        <KPICard
+          title="Delayed Deliveries"
+          value={kpis.delayedCount}
+          sub="stuck in logistics > 45d"
+          color="red"
+          onClick={() => goToPurchase('delayed-delivery')}
+          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>}
         />
         <KPICard
           title="Vendor Score"

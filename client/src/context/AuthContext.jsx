@@ -1,7 +1,19 @@
 import { createContext, useContext, useEffect, useState } from 'react'
+import { createClient } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 
 const AuthContext = createContext()
+
+// Isolated client used ONLY to validate a password without creating a session
+// on the main client. persistSession:false + its own storageKey means it never
+// writes the main auth token or fires the main client's onAuthStateChange — so
+// the 2FA flow can validate the password and then show the OTP screen without
+// the app briefly seeing a logged-in user and navigating away.
+const verifyClient = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+  { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: 'sb-jdil-verify' } }
+)
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
@@ -61,14 +73,14 @@ export function AuthProvider({ children }) {
   }
 
   /**
-   * Step 1 of 2FA: confirm credentials without creating a lasting session.
-   * Signs in, then immediately signs out. Returns { error }.
+   * Step 1 of 2FA: confirm credentials WITHOUT touching the main session.
+   * Runs on an isolated client so no SIGNED_IN fires on the main client (which
+   * would otherwise redirect away from /login and unmount the OTP screen).
    */
   async function verifyPassword(email, password) {
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) return { error }
-    await supabase.auth.signOut()
-    return { error: null }
+    const { error } = await verifyClient.auth.signInWithPassword({ email, password })
+    if (!error) { try { await verifyClient.auth.signOut() } catch { /* ignore */ } }
+    return { error }
   }
 
   /**

@@ -200,6 +200,19 @@ export default function PODetailPanel({ po, onClose, onSave }) {
     setPdfLoading(false)
   }
 
+  const [clearing, setClearing] = useState(false)
+  async function handleClearAlerts() {
+    setClearing(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch(`/api/po/${po.id}/clear-alerts`, {
+        method: 'POST', headers: { Authorization: `Bearer ${session?.access_token}` },
+      })
+      if (resp.ok) onSave?.()
+    } catch (e) { console.error('Clear alerts error:', e) }
+    setClearing(false)
+  }
+
   const role      = profile?.role
   const teamCode  = profile?.team_code
   const canEdit   = (key) => canEditField(role, key)
@@ -362,6 +375,16 @@ export default function PODetailPanel({ po, onClose, onSave }) {
                   </svg>
                 )}
                 {pdfLoading ? 'Generating…' : 'Download PDF'}
+              </button>
+            )}
+            {role === 'admin' && (form.is_stale || form.is_delivery_stale) && (
+              <button
+                onClick={handleClearAlerts}
+                disabled={clearing}
+                className="text-xs py-1.5 px-3 rounded-lg border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60"
+                title="Clear stale/delivery alerts for this PO"
+              >
+                {clearing ? 'Clearing…' : 'Clear Alert'}
               </button>
             )}
             <button

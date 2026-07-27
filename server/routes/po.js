@@ -213,13 +213,22 @@ router.patch('/:id', requireAuth, async (req, res) => {
   const newElapsed = daysElapsed(merged.po_date)
   const oldStatus  = current.status
 
+  // Recompute stale flags per stage-based definitions; auto-clear alerts when a
+  // PO moves out of its stuck state.
+  const overdue         = overdueDays(merged) > OVERDUE_DAYS
+  const isStale         = PURCHASE_STAGES.has(newStatus) && overdue
+  const isDeliveryStale = LOGISTICS_STAGES.has(newStatus) && !merged.delivered_to_rig_date && overdue
+
   const updatePayload = {
     ...sanitised,
-    status:       newStatus,
-    days_elapsed: newElapsed,
-    is_stale:     overdueDays(merged) > OVERDUE_DAYS,
-    updated_at:   new Date().toISOString(),
+    status:            newStatus,
+    days_elapsed:      newElapsed,
+    is_stale:          isStale,
+    is_delivery_stale: isDeliveryStale,
+    updated_at:        new Date().toISOString(),
   }
+  if (!isStale)         updatePayload.last_stale_alert_sent = null
+  if (!isDeliveryStale) updatePayload.last_delivery_stale_alert_sent = null
 
   const { data, error } = await supabase
     .from('po_orders').update(updatePayload).eq('id', req.params.id).select().single()
@@ -443,6 +452,30 @@ router.patch('/items/:itemId', requireAuth, async (req, res) => {
       }
     })().catch(e => console.error('[po items PATCH] dispatch error (non-fatal):', e))
   }
+})
+
+// ─── POST /api/po/:id/clear-alerts — admin manual alert clear ─────────────────
+router.post('/:id/clear-alerts', requireAuth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' })
+
+  const { data, error } = await supabase
+    .from('po_orders')
+    .update({
+      is_stale: false, is_delivery_stale: false,
+      last_stale_alert_sent: null, last_delivery_stale_alert_sent: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', req.params.id).select().single()
+  if (error) return res.status(400).json({ error: error.message })
+
+  await supabase.from('audit_log').insert({
+    po_id: req.params.id, changed_by: req.user.id, field_changed: 'alerts',
+    old_value: 'active', new_value: 'cleared',
+    reason: `Manual alert clear by ${req.user.email || req.user.id}`,
+    changed_at: new Date().toISOString(),
+  }).catch(e => console.error('[clear-alerts] audit error:', e))
+
+  res.json({ success: true, data })
 })
 
 module.exports = router

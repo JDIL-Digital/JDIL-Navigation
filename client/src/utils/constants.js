@@ -56,6 +56,20 @@ export const DISPATCH_LOCATION_OPTIONS = [
 // Logistics team codes (mirrors LOGISTICS_CODES) for the Logistics Team Code field.
 export const LOGISTICS_TEAM_CODES = ['SV-01', 'SS-02', 'AK-03', 'KT-04', 'MK-05', 'RS-06']
 
+// Logistics performance chart — group codes by physical location.
+export const LOGISTICS_LOCATION_GROUPS = {
+  'BKC':           ['SV-01', 'SS-02'],
+  'Taloja':        ['AK-03', 'KT-04'],
+  'Nhava/Pipavav': ['MK-05'],
+  'Nagothane':     ['RS-06'],
+}
+
+// Pipeline-stage groupings for staleness classification.
+// Purchase team owns these — a PO overdue here is "stale".
+export const PURCHASE_STAGES = ['MR Created', 'PO Released', 'Buyer Assigned', 'Vendor Confirmed']
+// Logistics team owns these — a PO overdue here is a "delayed delivery".
+export const LOGISTICS_STAGES = ['At JDIL Location', 'Dispatched from JDIL', 'In Transit to JDIL', 'In Transit to Rig']
+
 // ── Reverse Logistics ─────────────────────────────────────────────────────────
 export const RL_JOB_TYPES = ['Repair', 'Return', 'Replacement']
 

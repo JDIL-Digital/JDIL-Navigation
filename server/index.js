@@ -85,15 +85,15 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' })
 })
 
-// ── Stale PO checker — runs every day at 8 am ─────────────────────────────────
-cron.schedule('0 8 * * *', async () => {
+// ── Stale/overdue escalation — 9am, 1pm, 6pm IST ──────────────────────────────
+cron.schedule('0 9,13,18 * * *', async () => {
   try {
     const { checkStaleOrders } = require('./utils/staleChecker')
     await checkStaleOrders()
   } catch (e) {
     console.error('[cron] stale checker error:', e)
   }
-})
+}, { timezone: 'Asia/Kolkata' })
 
 // ── Process-level safety nets — never exit on a stray async error ─────────────
 process.on('unhandledRejection', reason => {

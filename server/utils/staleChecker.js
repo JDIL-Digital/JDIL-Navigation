@@ -77,85 +77,89 @@ async function loadSettings() {
   }
 }
 
+const PURCHASE_STAGES  = new Set(['MR Created', 'PO Released', 'Buyer Assigned', 'Vendor Confirmed'])
+const LOGISTICS_STAGES = new Set(['At JDIL Location', 'Dispatched from JDIL', 'In Transit to JDIL', 'In Transit to Rig'])
+const MINGUEL = 'minguel.pinto@jindalmumbai.com'
+const MOORTHY = 'moorthy@jindalmumbai.com'
+
+function hoursSince(ts) {
+  if (!ts) return Infinity
+  return (Date.now() - new Date(ts).getTime()) / 3_600_000
+}
+async function userByTeamCode(code) {
+  if (!code) return null
+  const { data } = await supabase
+    .from('users').select('email, name').eq('team_code', code).eq('is_active', true).limit(1)
+  return data && data[0] ? data[0] : null
+}
+
 async function checkStaleOrders() {
   try {
-    const { overdueDays, alertEmails, emailEnabled } = await loadSettings()
+    const { overdueDays, emailEnabled } = await loadSettings()
 
-    // Reverse logistics staleness runs independently of PO early-returns below.
+    // Is this the 9am IST run? (buyer escalation is once-daily, on the 9am run)
+    const istHour = Number(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }))
+    const is9amRun = istHour === 9
+
+    // Reverse logistics staleness runs independently.
     await checkStaleRLJobs({ overdueDays, emailEnabled })
 
-    const { data: orders } = await supabase
-      .from('po_orders')
-      .select('*')
-      .neq('status', 'Delivered to Rig')
-
+    const { data: orders } = await supabase.from('po_orders').select('*')
     if (!orders?.length) return
 
-    const now = new Date()
-    // Overdue is measured from promised_ready_date; fall back to po_date if absent.
     const baseDate = o => o.promised_ready_date || o.po_date
-    const daysPastBase = o => {
-      const base = baseDate(o)
-      return base ? Math.floor((now - new Date(base)) / 86400000) : 0
-    }
-    const stale = orders.filter(o => {
-      if (!baseDate(o)) return false
-      return daysPastBase(o) > overdueDays
-    })
+    const daysPast = o => { const b = baseDate(o); return b ? Math.floor((Date.now() - new Date(b).getTime()) / 86400000) : 0 }
 
-    if (!stale.length) return
+    const { overduePurchaseEmail, delayedDeliveryEmail } = require('./email')
+    let purchaseAlerts = 0, deliveryAlerts = 0
 
-    // Update is_stale flag
-    await Promise.all(stale.map(o =>
-      supabase.from('po_orders').update({ is_stale: true }).eq('id', o.id)
-    ))
+    for (const po of orders) {
+      const status = po.status
+      const overdue = baseDate(po) && daysPast(po) > overdueDays
 
-    if (!emailEnabled) {
-      console.log(`Stale checker: flagged ${stale.length} POs (email notifications disabled)`)
-      return
-    }
-
-    // Get csuite email recipients
-    const { data: csuiteUsers } = await supabase
-      .from('users')
-      .select('email')
-      .eq('role', 'csuite')
-      .eq('is_active', true)
-
-    const recipients = [
-      ...alertEmails,
-      ...(csuiteUsers?.map(u => u.email) || []),
-    ]
-
-    await sendEmail({
-      to: [...new Set(recipients)],
-      subject: `⚠️ JDIL Navigation: ${stale.length} Stale PO${stale.length > 1 ? 's' : ''} — Action Required`,
-      html: staleAlertEmail(stale, overdueDays),
-    })
-
-    // Create in-app notifications
-    const notifs = []
-    for (const po of stale) {
-      const { data: allUsers } = await supabase
-        .from('users')
-        .select('id')
-        .in('role', ['admin', 'csuite'])
-        .eq('is_active', true)
-
-      if (allUsers) {
-        notifs.push(...allUsers.map(u => ({
-          user_id: u.id,
-          type: 'overdue',
-          title: `Stale PO: ${po.po_number}`,
-          message: `${po.po_number} for ${po.rig_name} is ${daysPastBase(po)} days past its promised ready date`,
-          is_read: false,
-          created_at: now.toISOString(),
-        })))
+      // ── PATH 1 — purchase-stuck ─────────────────────────────────────────────
+      if (PURCHASE_STAGES.has(status)) {
+        if (!overdue) continue
+        if (!po.is_stale) await supabase.from('po_orders').update({ is_stale: true }).eq('id', po.id)
+        if (!emailEnabled) continue
+        try {
+          const buyer = await userByTeamCode(po.buyer_code)
+          let to, cc, throttleH, gated
+          if (buyer) {
+            to = buyer.email; cc = MINGUEL; throttleH = 20; gated = is9amRun   // once/day on the 9am run
+          } else {
+            to = MINGUEL; cc = null; throttleH = 3; gated = true               // 3x/day
+          }
+          if (gated && hoursSince(po.last_stale_alert_sent) >= throttleH) {
+            await sendEmail({ to, cc, subject: `Overdue Purchase Order — ${po.po_number}`, html: overduePurchaseEmail(po, buyer?.name, daysPast(po)) })
+            await supabase.from('po_orders').update({ last_stale_alert_sent: new Date().toISOString() }).eq('id', po.id)
+            purchaseAlerts++
+          }
+        } catch (e) { console.error(`[stale] purchase alert failed for ${po.po_number}:`, e.message) }
+        continue
       }
-    }
-    if (notifs.length) await supabase.from('notifications').insert(notifs)
 
-    console.log(`Stale checker: flagged ${stale.length} POs, notified ${recipients.length} recipients`)
+      // ── PATH 2 — logistics-stuck ────────────────────────────────────────────
+      if (LOGISTICS_STAGES.has(status) && !po.delivered_to_rig_date) {
+        if (!overdue) continue
+        if (!po.is_delivery_stale) await supabase.from('po_orders').update({ is_delivery_stale: true }).eq('id', po.id)
+        if (!emailEnabled) continue
+        try {
+          const logi = await userByTeamCode(po.logistics_team_code)
+          const to = logi ? logi.email : MOORTHY
+          const cc = logi ? MOORTHY : null
+          if (hoursSince(po.last_delivery_stale_alert_sent) >= 3) {   // 3x/day
+            await sendEmail({ to, cc, subject: `Delayed Delivery — ${po.po_number} stuck at ${status}`, html: delayedDeliveryEmail(po, daysPast(po)) })
+            await supabase.from('po_orders').update({ last_delivery_stale_alert_sent: new Date().toISOString() }).eq('id', po.id)
+            deliveryAlerts++
+          }
+        } catch (e) { console.error(`[stale] delivery alert failed for ${po.po_number}:`, e.message) }
+        continue
+      }
+      // Delivered or otherwise not stuck → nothing to do (clearing handled in PATCH).
+    }
+
+    console.log(`Stale checker (${is9amRun ? '9am' : istHour + ':00'} IST): ${purchaseAlerts} purchase alerts, ${deliveryAlerts} delivery alerts`)
   } catch (err) {
     console.error('Stale checker error:', err)
   }
