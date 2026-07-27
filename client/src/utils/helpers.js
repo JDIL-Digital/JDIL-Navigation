@@ -1,4 +1,4 @@
-import { PO_STATUSES } from './constants'
+import { PO_STATUSES, PURCHASE_STAGES, LOGISTICS_STAGES } from './constants'
 
 export function formatDate(dateStr) {
   if (!dateStr) return '—'
@@ -130,6 +130,36 @@ export function overdueDays(po) {
 export function isOverdue(po, threshold = 45) {
   if (calcStatus(po) === 'Delivered to Rig') return false
   return overdueDays(po) > threshold
+}
+
+// Whole days elapsed since a date (0 if unset/future).
+export function daysSince(dateStr) {
+  if (!dateStr) return 0
+  return Math.max(0, daysElapsed(dateStr))
+}
+
+// STALE (vendor-side) — progressive day-1+ definition, mirrors the server.
+// Promised date passed, material not yet received, still in a purchase stage.
+// (The optional arg is accepted-but-ignored so legacy callers keep working.)
+export function isPurchaseStale(po, _legacyThreshold) {
+  if (!po.promised_ready_date || po.material_received_date) return false
+  if (!PURCHASE_STAGES.includes(calcStatus(po))) return false
+  return daysSince(po.promised_ready_date) >= 1
+}
+
+// DELAYED DELIVERY (logistics-side) — progressive day-1+ definition.
+// Material received at JDIL, not yet delivered to rig, still in a logistics stage.
+export function isDeliveryStale(po, _legacyThreshold) {
+  if (!po.material_received_date || po.delivered_to_rig_date) return false
+  if (!LOGISTICS_STAGES.includes(calcStatus(po))) return false
+  return daysSince(po.material_received_date) >= 1
+}
+
+// Days-late number for whichever flow the PO is in (0 if neither).
+export function daysLate(po) {
+  if (isPurchaseStale(po)) return daysSince(po.promised_ready_date)
+  if (isDeliveryStale(po)) return daysSince(po.material_received_date)
+  return 0
 }
 
 export function generateMRNumber(existingCount) {

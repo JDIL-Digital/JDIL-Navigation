@@ -45,6 +45,7 @@ const notifRoutes  = require('./routes/notifications')
 const reportRoutes = require('./routes/reports')
 const vendorRoutes = require('./routes/vendors')
 const rlRoutes     = require('./routes/reverseLogistics')
+const settingsRoutes = require('./routes/settings')
 
 app.use('/api/po',            poRoutes)
 app.use('/api/users',         userRoutes)
@@ -52,6 +53,7 @@ app.use('/api/notifications', notifRoutes)
 app.use('/api/reports',       reportRoutes)
 app.use('/api/vendors',       vendorRoutes)
 app.use('/api/rl',            rlRoutes)
+app.use('/api/settings',      settingsRoutes)
 
 app.get('/api/health', (_req, res) =>
   res.json({ status: 'ok', env: IS_PROD ? 'production' : 'development', ts: new Date().toISOString() })
@@ -179,15 +181,15 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' })
 })
 
-// ── Stale PO checker — runs every day at 8 am ─────────────────────────────────
-cron.schedule('0 8 * * *', async () => {
+// ── Progressive escalation summaries — once daily at 9am IST ──────────────────
+cron.schedule('0 9 * * *', async () => {
   try {
     const { checkStaleOrders } = require('./utils/staleChecker')
     await checkStaleOrders()
   } catch (e) {
     console.error('[cron] stale checker error:', e)
   }
-})
+}, { timezone: 'Asia/Kolkata' })
 
 // ── Process-level safety nets — never exit on a stray async error ─────────────
 process.on('unhandledRejection', reason => {

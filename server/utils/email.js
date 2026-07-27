@@ -38,21 +38,24 @@ function allowRecipient(email) {
  * Silently returns null if the recipient list is empty.
  * Recipients over the per-minute throttle are skipped (logged, not thrown).
  */
-async function sendEmail({ to, subject, html }) {
+async function sendEmail({ to, cc, subject, html }) {
   const all = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean)
   const recipients = all.filter(addr => {
     const ok = allowRecipient(addr)
     if (!ok) console.warn(`[email] throttled (>${THROTTLE_MAX}/min): ${addr}`)
     return ok
   })
-  if (!recipients.length) return null
+  const ccList = (Array.isArray(cc) ? cc : [cc]).filter(Boolean).filter(addr => allowRecipient(addr))
+  if (!recipients.length && !ccList.length) return null
   try {
     const info = await transporter.sendMail({
       from: `"JDIL Navigation" <${process.env.EMAIL_USER}>`,
       to:   recipients.join(', '),
+      ...(ccList.length ? { cc: ccList.join(', ') } : {}),
       subject,
       html,
     })
+    console.log(`[email] sent "${subject}" → to:[${recipients.join(', ')}]${ccList.length ? ` cc:[${ccList.join(', ')}]` : ''}`)
     return info
   } catch (err) {
     console.error('[email] sendMail error:', err.message)
@@ -431,6 +434,131 @@ function reverseLogisticsStaleEmail(job, days) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 8. Overdue Purchase Order (purchase-stuck escalation)
+// ─────────────────────────────────────────────────────────────────────────────
+const APP_LINK = 'https://jdil-navigation.replit.app'
+
+function overduePurchaseEmail(po, buyerName, days) {
+  const body = `
+    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px 18px;margin-bottom:22px">
+      <p style="margin:0;font-size:14px;color:#991b1b;line-height:1.5">
+        &#9888;&#65039; Purchase Order <strong>${po.po_number || '—'}</strong> (MR: ${po.mr_number || '—'}) for
+        <strong>${po.rig_name || '—'}</strong> is <strong style="color:#dc2626">${days} days past promised ready date</strong>.
+      </p>
+    </div>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;border-collapse:collapse">
+      ${detailRow('Current Status', po.status, true)}
+      ${detailRow('Vendor',         po.vendor_name)}
+      ${detailRow('Buyer',          buyerName || 'Not assigned')}
+    </table>
+    <p style="margin:18px 0 0;font-size:13px;color:#374151">Please follow up with the vendor and update the status in JDIL Navigation.</p>
+    ${ctaButton('Open JDIL Navigation', APP_LINK, '#dc2626')}
+  `
+  return emailBase('Overdue Purchase Order', body)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. Delayed Delivery (logistics-stuck escalation)
+// ─────────────────────────────────────────────────────────────────────────────
+function delayedDeliveryEmail(po, days) {
+  const body = `
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 18px;margin-bottom:22px">
+      <p style="margin:0;font-size:14px;color:#92400e;line-height:1.5">
+        Purchase Order <strong>${po.po_number || '—'}</strong> (MR: ${po.mr_number || '—'}) for
+        <strong>${po.rig_name || '—'}</strong> has been at status
+        <strong>'${po.status}'</strong> for <strong style="color:#b45309">${days} days</strong>.
+      </p>
+    </div>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;border-collapse:collapse">
+      ${detailRow('Vendor',                   po.vendor_name)}
+      ${detailRow('Material Dispatch Location', po.jdil_location || 'Not set')}
+      ${detailRow('Logistics Team Code',       po.logistics_team_code || 'Not assigned')}
+    </table>
+    <p style="margin:18px 0 0;font-size:13px;color:#374151">Please expedite the delivery and update the status in JDIL Navigation.</p>
+    ${ctaButton('Open JDIL Navigation', APP_LINK, '#b45309')}
+  `
+  return emailBase('Delayed Delivery', body)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. Progressive escalation summary email (one email per recipient per day)
+// ─────────────────────────────────────────────────────────────────────────────
+const STALE_FILTER_LINK = 'https://jdil-navigation.replit.app/purchase?filter=stale'
+const SUMMARY_MAX_ROWS = 30
+
+// Fixed sections, most-severe first. Each PO is bucketed by escalation level.
+const SUMMARY_SECTIONS = [
+  { key: 'serious',    title: 'SERIOUS — 5+ days late',    head: '#b91c1c', border: '#fecaca', thBg: '#fee2e2', thText: '#7f1d1d', rowBorder: '#fee2e2' },
+  { key: 'concerning', title: 'CONCERNING — 3-4 days late', head: '#b45309', border: '#fde68a', thBg: '#fef3c7', thText: '#78350f', rowBorder: '#fef3c7' },
+  { key: 'early',      title: 'EARLY — 1-2 days late',      head: '#166534', border: '#bbf7d0', thBg: '#dcfce7', thText: '#14532d', rowBorder: '#dcfce7' },
+]
+
+/**
+ * Renders ONE progressive-escalation summary email for a single recipient.
+ * POs are grouped into Serious / Concerning / Early sections; empty sections
+ * are skipped; each section caps at 30 rows.
+ *
+ * @param {Array} items — [{ po, daysLate, level }]  (level: 'serious'|'concerning'|'early')
+ * @returns {string} full HTML email
+ */
+function renderSummaryEmail(items) {
+  const nowIST = new Date().toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: true,
+  })
+
+  const sectionHtml = SUMMARY_SECTIONS.map(sec => {
+    const rows = items
+      .filter(i => i.level === sec.key)
+      .sort((a, b) => b.daysLate - a.daysLate)
+    if (!rows.length) return ''
+    const shown = rows.slice(0, SUMMARY_MAX_ROWS)
+    const hidden = rows.length - shown.length
+
+    const th = txt => `<th style="padding:9px 12px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:${sec.thText};font-weight:600;white-space:nowrap">${txt}</th>`
+    const td = (val, extra = '') => `<td style="padding:9px 12px;border-bottom:1px solid ${sec.rowBorder};font-size:12px;color:#374151;${extra}">${val ?? '&mdash;'}</td>`
+
+    const bodyRows = shown.map(({ po, daysLate }) => `<tr>
+      ${td(po.po_number || '&mdash;', 'font-weight:600;color:#111827;white-space:nowrap')}
+      ${td(po.mr_number || '&mdash;', 'white-space:nowrap')}
+      ${td(po.rig_name || '&mdash;')}
+      ${td(po.vendor_name || '&mdash;')}
+      ${td(`${daysLate}d`, 'font-weight:700;color:#dc2626;text-align:center')}
+      ${td(po.status || '&mdash;', 'white-space:nowrap')}
+    </tr>`).join('')
+
+    return `
+    <h2 style="margin:26px 0 10px;font-size:14px;font-weight:700;color:${sec.head};letter-spacing:0.2px">${sec.title} (${rows.length} PO${rows.length !== 1 ? 's' : ''})</h2>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${sec.border};border-radius:8px;overflow:hidden;border-collapse:collapse">
+      <thead>
+        <tr style="background:${sec.thBg}">
+          ${th('PO Number')}${th('MR Number')}${th('Rig')}${th('Vendor')}${th('Days Late')}${th('Current Status')}
+        </tr>
+      </thead>
+      <tbody style="background:#ffffff">${bodyRows}</tbody>
+    </table>
+    ${hidden > 0 ? `<p style="margin:8px 0 0;font-size:12px;color:#6b7280;font-style:italic">&hellip; and ${hidden} more overdue PO${hidden !== 1 ? 's' : ''}. See full list at link.</p>` : ''}`
+  }).join('')
+
+  const body = `
+    <p style="margin:0 0 6px;font-size:16px;font-weight:600;color:#111827">Overdue Purchase Order Summary</p>
+    <p style="margin:0 0 4px;font-size:13px;color:#6b7280;line-height:1.6">
+      Below is a summary of Purchase Orders past their promised dates as of <strong>${nowIST} IST</strong>.
+      Days-late calculated from Promised Ready Date (vendor side) or Material Received Date (logistics side).
+    </p>
+    ${sectionHtml}
+    <p style="margin:26px 0 0;font-size:13px;color:#374151">
+      Full details: <a href="${STALE_FILTER_LINK}" style="color:#1a7a3c;font-weight:600">${STALE_FILTER_LINK}</a>
+    </p>
+    <p style="margin:10px 0 0;font-size:11px;color:#9ca3af">
+      This is an automated alert from JDIL Navigation. Please do not reply.
+    </p>
+  `
+  return emailBase('Overdue PO Summary', body)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 module.exports = {
   sendEmail,
   newPOEmail,
@@ -440,4 +568,7 @@ module.exports = {
   newRegistrationEmail,
   partialDeliveryEmail,
   reverseLogisticsStaleEmail,
+  overduePurchaseEmail,
+  delayedDeliveryEmail,
+  renderSummaryEmail,
 }

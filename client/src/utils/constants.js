@@ -25,9 +25,20 @@ export const PO_RIG_OPTIONS = [
 // Alias — always mirrors PO_RIG_OPTIONS so legacy imports keep working
 export const RIG_NAMES = PO_RIG_OPTIONS
 
+// Buyer team codes. The last two are literal names (new joiners without an
+// official code yet) used as their temporary team_code — NOT typos.
 export const BUYER_CODES = [
-  'AP-31', 'RT-13', 'MP', 'MB-42', 'DC-22',
-  'PM-29', 'AD-44', 'AC-36', 'UN-45', 'MC-38',
+  'AP-31',
+  'RT-13',
+  'MB-42',
+  'DC-22',
+  'PM-29',
+  'AD-44',
+  'AC-36',
+  'UN-45',
+  'MC-38',
+  'Sahil Kini',
+  'Anthony Ranjire',
 ]
 
 export const LOGISTICS_CODES = [
@@ -55,6 +66,20 @@ export const DISPATCH_LOCATION_OPTIONS = [
 
 // Logistics team codes (mirrors LOGISTICS_CODES) for the Logistics Team Code field.
 export const LOGISTICS_TEAM_CODES = ['SV-01', 'SS-02', 'AK-03', 'KT-04', 'MK-05', 'RS-06']
+
+// Logistics performance chart — group codes by physical location.
+export const LOGISTICS_LOCATION_GROUPS = {
+  'BKC':           ['SV-01', 'SS-02'],
+  'Taloja':        ['AK-03', 'KT-04'],
+  'Nhava/Pipavav': ['MK-05'],
+  'Nagothane':     ['RS-06'],
+}
+
+// Pipeline-stage groupings for staleness classification.
+// Purchase team owns these — a PO overdue here is "stale".
+export const PURCHASE_STAGES = ['MR Created', 'PO Released', 'Buyer Assigned', 'Vendor Confirmed']
+// Logistics team owns these — a PO overdue here is a "delayed delivery".
+export const LOGISTICS_STAGES = ['At JDIL Location', 'Dispatched from JDIL', 'In Transit to JDIL', 'In Transit to Rig']
 
 // ── Reverse Logistics ─────────────────────────────────────────────────────────
 export const RL_JOB_TYPES = ['Repair', 'Return', 'Replacement']

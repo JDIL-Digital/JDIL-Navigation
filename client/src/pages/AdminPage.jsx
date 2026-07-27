@@ -7,11 +7,11 @@ import VendorsTab from '../components/ui/VendorsTab'
 
 const TABS = ['User Management', 'Audit Log', 'System Settings', 'Vendors']
 
-// ── API helper (calls Express /api/users with the user's JWT) ─────────────────
-async function userApi(path, method = 'GET', body = undefined) {
+// ── API helpers (call Express /api with the user's JWT) ───────────────────────
+async function apiFetch(path, method = 'GET', body = undefined) {
   const { data: { session } } = await supabase.auth.getSession()
   const token = session?.access_token
-  const res = await fetch(`/api/users${path}`, {
+  const res = await fetch(`/api${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
@@ -23,6 +23,8 @@ async function userApi(path, method = 'GET', body = undefined) {
   if (!res.ok) throw new Error(json.error || 'Request failed')
   return json
 }
+
+const userApi = (path, method, body) => apiFetch(`/users${path}`, method, body)
 
 // ── CSV export ────────────────────────────────────────────────────────────────
 function downloadCSV(rows, filename = 'audit_log.csv') {
@@ -176,7 +178,12 @@ export default function AdminPage() {
   const [settingsLoading, setSettingsLoading] = useState(false)
   const [settingsSaving, setSettingsSaving]   = useState(false)
   const [settingsMsg, setSettingsMsg]         = useState('')
-  const [newEmail, setNewEmail]               = useState('')
+
+  // ── Alert system status + grace period ──
+  const [alertsEnabled, setAlertsEnabled]     = useState(null)  // null = unknown
+  const [graceCount, setGraceCount]           = useState(null)
+  const [graceClearing, setGraceClearing]     = useState(false)
+  const [graceMsg, setGraceMsg]               = useState('')
 
   // ── Data loaders ──
   async function loadUsers() {
@@ -212,6 +219,14 @@ export default function AdminPage() {
       })
     }
     setSettingsLoading(false)
+
+    // Alert kill-switch status + grace period count (non-blocking)
+    apiFetch('/settings/alerts-status')
+      .then(r => setAlertsEnabled(!!r.enabled))
+      .catch(() => setAlertsEnabled(null))
+    apiFetch('/po/grace-period/count')
+      .then(r => setGraceCount(r.count ?? 0))
+      .catch(() => setGraceCount(null))
   }
 
   // Initial load
@@ -308,15 +323,16 @@ export default function AdminPage() {
     setTimeout(() => setSettingsMsg(''), 3500)
   }
 
-  function addAlertEmail() {
-    const e = newEmail.trim().toLowerCase()
-    if (!e || !e.includes('@') || settings.alert_emails.includes(e)) return
-    setSettings(s => ({ ...s, alert_emails: [...s.alert_emails, e] }))
-    setNewEmail('')
-  }
-
-  function removeAlertEmail(email) {
-    setSettings(s => ({ ...s, alert_emails: s.alert_emails.filter(x => x !== email) }))
+  async function handleClearAllGrace() {
+    if (!window.confirm('This will cause all currently stale POs to start receiving alerts. Are you sure?')) return
+    setGraceClearing(true); setGraceMsg('')
+    try {
+      const r = await apiFetch('/po/grace-period/clear-all', 'POST')
+      setGraceCount(0)
+      setGraceMsg(`Grace period cleared for ${r.cleared} PO${r.cleared !== 1 ? 's' : ''}.`)
+    } catch (e) { setGraceMsg(`Error: ${e.message}`) }
+    setGraceClearing(false)
+    setTimeout(() => setGraceMsg(''), 5000)
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -583,13 +599,151 @@ export default function AdminPage() {
             </div>
           ) : (
             <>
-              {/* ── Overdue Threshold ── */}
+              {/* ── Alert System Status (env-controlled kill switch, read-only) ── */}
+              <div className="card p-5">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                      Alert System Status
+                    </h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      Master kill switch for all escalation emails. Controlled by the
+                      <code className="mx-1 px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-[11px]">ALERTS_ENABLED</code>
+                      environment variable — cannot be changed from this panel.
+                    </p>
+                  </div>
+                  {alertsEnabled === null ? (
+                    <span className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 rounded-full px-3 py-1 font-semibold shrink-0">
+                      UNKNOWN
+                    </span>
+                  ) : alertsEnabled ? (
+                    <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full px-3 py-1 font-semibold shrink-0">
+                      ENABLED
+                    </span>
+                  ) : (
+                    <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-full px-3 py-1 font-semibold shrink-0">
+                      DISABLED — safety mode
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* ── Alert Grace Period ── */}
               <div className="card p-5">
                 <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-0.5">
-                  Overdue Threshold
+                  Alert Grace Period
                 </h3>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-                  POs open longer than this many days are flagged as overdue and trigger alert emails.
+                  Legacy flag, retained for future use. Under the current progressive
+                  escalation system, grace-period POs <strong>still receive alerts</strong>.
+                  The flag no longer suppresses emails.
+                </p>
+                <div className="flex items-center justify-between gap-4 flex-wrap">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                      {graceCount === null ? '—' : graceCount}
+                    </span>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      PO{graceCount === 1 ? '' : 's'} currently in grace period
+                    </span>
+                  </div>
+                  <button
+                    onClick={handleClearAllGrace}
+                    disabled={graceClearing || !graceCount}
+                    className="text-xs bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-md transition-colors">
+                    {graceClearing ? 'Clearing…' : 'Clear Grace Period for All'}
+                  </button>
+                </div>
+                {graceMsg && (
+                  <p className={`mt-3 text-xs font-medium ${
+                    graceMsg.startsWith('Error') ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'
+                  }`}>
+                    {graceMsg}
+                  </p>
+                )}
+              </div>
+
+              {/* ── Escalation Rules (read-only reference) ── */}
+              <div className="card p-5">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-0.5">
+                  Escalation Rules
+                </h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                  POs past their promised date escalate progressively. A daily 9am IST summary
+                  goes to each recipient (one email per person, grouped by severity).
+                </p>
+
+                <div className="overflow-x-auto mb-5">
+                  <table className="w-full min-w-[520px] text-xs border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
+                    <thead>
+                      <tr className="bg-gray-50 dark:bg-gray-800/60 text-left">
+                        <th className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300">Level</th>
+                        <th className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300">Vendor-side (buyer primary)</th>
+                        <th className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300">Logistics-side (logistics primary)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                      <tr>
+                        <td className="px-3 py-2 whitespace-nowrap"><span className="text-green-700 dark:text-green-400 font-semibold">EARLY</span> · Day 1–2</td>
+                        <td className="px-3 py-2 text-gray-600 dark:text-gray-400">TO: Buyer</td>
+                        <td className="px-3 py-2 text-gray-600 dark:text-gray-400">TO: Logistics user</td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-2 whitespace-nowrap"><span className="text-amber-700 dark:text-amber-400 font-semibold">CONCERNING</span> · Day 3–4</td>
+                        <td className="px-3 py-2 text-gray-600 dark:text-gray-400">TO: Buyer · CC: Pinto</td>
+                        <td className="px-3 py-2 text-gray-600 dark:text-gray-400">TO: Logistics user · CC: Moorthy</td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-2 whitespace-nowrap"><span className="text-red-700 dark:text-red-400 font-semibold">SERIOUS</span> · Day 5+</td>
+                        <td className="px-3 py-2 text-gray-600 dark:text-gray-400">TO: Buyer · CC: Pinto</td>
+                        <td className="px-3 py-2 text-gray-600 dark:text-gray-400">TO: Logistics user · CC: Moorthy</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-2">
+                    If the buyer/logistics user can't be identified, the primary TO falls back to
+                    Pinto (vendor) or Moorthy (logistics). Pinto and Moorthy also each receive a
+                    daily master summary of their whole side. At Day 5+, each Rig Manager receives
+                    their own dedicated summary containing only their rig's serious POs.
+                  </p>
+                </div>
+
+                <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">Rig Manager mapping (Day 5+ dedicated per-rig summary)</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[420px] text-xs border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                      {[
+                        ['Discovery 1 / DD', 'sanjay.mahavar@jindalmumbai.com'],
+                        ['Virtue 1 / DD', 's.mancharkar@jindalmumbai.com'],
+                        ['Jindal Star / DD', 'vivek.verma@jindalmumbai.com'],
+                        ['Jindal Explorer / DD', 'sk.sinha@jindalmumbai.com'],
+                        ['Jindal Pioneer / DD', 'varun.aggarwal@jindalmumbai.com'],
+                        ['Jindal Supreme / DD', 'nidhish.kumar@jindalmumbai.com'],
+                      ].map(([rig, email]) => (
+                        <tr key={rig}>
+                          <td className="px-3 py-2 whitespace-nowrap text-gray-700 dark:text-gray-300">{rig}</td>
+                          <td className="px-3 py-2 text-gray-500 dark:text-gray-400 font-mono text-[11px]">{email}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-2">
+                    Directional Drilling and MLU have no mapped rig manager — no rig-manager summary is sent for them.
+                    To modify recipients or thresholds, update constants in
+                    <code className="mx-1 px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800">server/utils/constants.js</code>
+                    and restart.
+                  </p>
+                </div>
+              </div>
+
+              {/* ── Legacy Overdue Threshold (Reverse Logistics only) ── */}
+              <div className="card p-5">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-0.5">
+                  Legacy Overdue Threshold
+                </h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                  No longer used by the PO escalation system (which now escalates from day 1).
+                  Still applied to <strong>Reverse Logistics</strong> staleness. Kept for reference.
                 </p>
                 <div className="flex items-center gap-4">
                   <input
@@ -611,40 +765,6 @@ export default function AdminPage() {
                 <div className="flex justify-between mt-2 px-0.5">
                   <span className="text-[10px] text-gray-400">7 days</span>
                   <span className="text-[10px] text-gray-400">120 days</span>
-                </div>
-              </div>
-
-              {/* ── Alert Email Recipients ── */}
-              <div className="card p-5">
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-0.5">
-                  Overdue Alert Recipients
-                </h3>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-                  These addresses receive automated overdue PO alert emails.
-                </p>
-                <div className="space-y-2 mb-3 min-h-[20px]">
-                  {settings.alert_emails.length === 0 ? (
-                    <p className="text-xs text-gray-400 dark:text-gray-500 italic">No recipients added yet.</p>
-                  ) : settings.alert_emails.map(email => (
-                    <div key={email}
-                      className="flex items-center justify-between bg-gray-50 dark:bg-gray-800 rounded-lg px-3 py-2">
-                      <span className="text-sm text-gray-700 dark:text-gray-300">{email}</span>
-                      <button onClick={() => removeAlertEmail(email)}
-                        className="text-gray-400 hover:text-red-500 transition-colors ml-3">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  <input type="email" className="input-field flex-1"
-                    placeholder="recipient@example.com"
-                    value={newEmail}
-                    onChange={e => setNewEmail(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addAlertEmail())} />
-                  <button onClick={addAlertEmail} className="btn-primary px-4 shrink-0">Add</button>
                 </div>
               </div>
 

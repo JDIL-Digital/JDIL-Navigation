@@ -26,7 +26,10 @@ const ROLE_EDITABLE_FIELDS = {
 
 // Fields that are always system-managed — never accepted from any client update.
 const SYSTEM_FIELDS = new Set([
-  'id', 'status', 'days_elapsed', 'is_stale', 'created_by', 'updated_at',
+  'id', 'status', 'days_elapsed', 'is_stale', 'is_delivery_stale',
+  'last_stale_alert_sent', 'last_delivery_stale_alert_sent',
+  'alert_grace_period', 'grace_period_reason', 'grace_period_set_at', 'grace_period_set_by',
+  'created_by', 'updated_at',
 ])
 
 function canEditField(role, fieldKey) {
