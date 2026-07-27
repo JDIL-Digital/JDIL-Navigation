@@ -200,6 +200,36 @@ export default function PODetailPanel({ po, onClose, onSave }) {
     setPdfLoading(false)
   }
 
+  // ── Alert grace period (admin only) ─────────────────────────────────────────
+  const [graceBusy, setGraceBusy]           = useState(false)
+  const [graceFormOpen, setGraceFormOpen]   = useState(false)
+  const [graceReason, setGraceReason]       = useState('')
+  const [graceError, setGraceError]         = useState('')
+  async function handleGracePeriod(enabled) {
+    setGraceBusy(true); setGraceError('')
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch(`/api/po/${po.id}/grace-period`, {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ enabled, reason: graceReason.trim() }),
+      })
+      const result = await resp.json()
+      if (!resp.ok) { setGraceError(result.error || 'Request failed'); setGraceBusy(false); return }
+      setForm(f => ({ ...f, ...result.data }))
+      setGraceFormOpen(false)
+      setGraceReason('')
+      onSave?.()
+    } catch (e) {
+      console.error('Grace period error:', e)
+      setGraceError(`Network error: ${e.message}`)
+    }
+    setGraceBusy(false)
+  }
+
   const [clearing, setClearing] = useState(false)
   async function handleClearAlerts() {
     setClearing(true)
@@ -420,6 +450,65 @@ export default function PODetailPanel({ po, onClose, onSave }) {
           </div>
           <PipelineDots status={status} />
         </div>
+
+        {/* Alert grace period (admin only) */}
+        {role === 'admin' && (
+          <div className="px-5 py-2.5 border-b border-gray-200 dark:border-gray-800">
+            {form.alert_grace_period ? (
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+                      🕓 Alert grace period active — excluded from escalation emails
+                    </p>
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5 truncate">
+                      {form.grace_period_reason || 'No reason recorded'}
+                      {form.grace_period_set_at && ` · since ${formatDate(form.grace_period_set_at.split('T')[0])}`}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleGracePeriod(false)}
+                    disabled={graceBusy}
+                    className="text-xs shrink-0 border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 px-2.5 py-1 rounded-md disabled:opacity-60">
+                    {graceBusy ? 'Removing…' : 'Remove from grace period'}
+                  </button>
+                </div>
+              </div>
+            ) : graceFormOpen ? (
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  className="input-field flex-1 text-xs"
+                  placeholder="Reason for grace period (required)…"
+                  value={graceReason}
+                  autoFocus
+                  onChange={e => setGraceReason(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && graceReason.trim() && handleGracePeriod(true)}
+                />
+                <button
+                  onClick={() => handleGracePeriod(true)}
+                  disabled={graceBusy || !graceReason.trim()}
+                  className="text-xs bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-2.5 py-1.5 rounded-md shrink-0">
+                  {graceBusy ? 'Adding…' : 'Add'}
+                </button>
+                <button
+                  onClick={() => { setGraceFormOpen(false); setGraceReason(''); setGraceError('') }}
+                  className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-1.5 py-1.5 shrink-0">
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setGraceFormOpen(true)}
+                className="text-xs text-gray-500 dark:text-gray-400 hover:text-amber-700 dark:hover:text-amber-400 transition-colors">
+                🕓 Add to grace period (mute escalation emails for this PO)
+              </button>
+            )}
+            {graceError && (
+              <p className="mt-1.5 text-[11px] text-red-600 dark:text-red-400">{graceError}</p>
+            )}
+          </div>
+        )}
 
         {/* Fields */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">

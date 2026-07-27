@@ -47,6 +47,39 @@ function overdueDays(po) {
   return Math.floor((Date.now() - new Date(base).getTime()) / 86400000)
 }
 
+// ── Progressive escalation staleness (day-1+, replaces the 45-day threshold) ──
+const _PURCHASE_STAGES  = new Set(['MR Created', 'PO Released', 'Buyer Assigned', 'Vendor Confirmed'])
+const _LOGISTICS_STAGES = new Set(['At JDIL Location', 'Dispatched from JDIL', 'In Transit to JDIL', 'In Transit to Rig'])
+
+// Whole days elapsed since a date (0 if unset/future).
+function daysSince(dateStr) {
+  if (!dateStr) return 0
+  return Math.max(0, Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000))
+}
+
+// FLOW 1 — vendor-side: promised date passed, material not yet received.
+// Days late is measured from promised_ready_date.
+function isVendorStale(po) {
+  if (!po.promised_ready_date || po.material_received_date) return false
+  if (!_PURCHASE_STAGES.has(calcStatus(po))) return false
+  return daysSince(po.promised_ready_date) >= 1
+}
+
+// FLOW 2 — logistics-side: material received at JDIL, not yet delivered to rig.
+// Days late is measured from material_received_date.
+function isLogisticsStale(po) {
+  if (!po.material_received_date || po.delivered_to_rig_date) return false
+  if (!_LOGISTICS_STAGES.has(calcStatus(po))) return false
+  return daysSince(po.material_received_date) >= 1
+}
+
+// Days-late number for whichever flow the PO is in (0 if neither).
+function daysLate(po) {
+  if (isVendorStale(po))    return daysSince(po.promised_ready_date)
+  if (isLogisticsStale(po)) return daysSince(po.material_received_date)
+  return 0
+}
+
 // ── Reverse Logistics status (latest filled field wins) ───────────────────────
 function calcReverseLogisticsStatus(job) {
   if (!job) return 'Job Created'
@@ -83,4 +116,8 @@ function getRLDisplayStatus(job) {
   }
 }
 
-module.exports = { calcStatus, getDisplayStatus, daysElapsed, overdueDays, calcReverseLogisticsStatus, getRLDisplayStatus }
+module.exports = {
+  calcStatus, getDisplayStatus, daysElapsed, overdueDays,
+  daysSince, isVendorStale, isLogisticsStale, daysLate,
+  calcReverseLogisticsStatus, getRLDisplayStatus,
+}

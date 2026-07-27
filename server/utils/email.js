@@ -481,72 +481,71 @@ function delayedDeliveryEmail(po, days) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 10. Escalation summary email (one email per recipient per run)
+// 10. Progressive escalation summary email (one email per recipient per day)
 // ─────────────────────────────────────────────────────────────────────────────
 const STALE_FILTER_LINK = 'https://jdil-navigation.replit.app/purchase?filter=stale'
-const SUMMARY_MAX_ROWS = 20
+const SUMMARY_MAX_ROWS = 30
 
-const SECTION_TONES = {
-  red:   { head: '#b91c1c', border: '#fecaca', thBg: '#fee2e2', thText: '#7f1d1d', rowBorder: '#fee2e2' },
-  amber: { head: '#b45309', border: '#fde68a', thBg: '#fef3c7', thText: '#78350f', rowBorder: '#fef3c7' },
-  green: { head: '#166534', border: '#bbf7d0', thBg: '#dcfce7', thText: '#14532d', rowBorder: '#dcfce7' },
-}
+// Fixed sections, most-severe first. Each PO is bucketed by escalation level.
+const SUMMARY_SECTIONS = [
+  { key: 'serious',    title: 'SERIOUS — 5+ days late',    head: '#b91c1c', border: '#fecaca', thBg: '#fee2e2', thText: '#7f1d1d', rowBorder: '#fee2e2' },
+  { key: 'concerning', title: 'CONCERNING — 3-4 days late', head: '#b45309', border: '#fde68a', thBg: '#fef3c7', thText: '#78350f', rowBorder: '#fef3c7' },
+  { key: 'early',      title: 'EARLY — 1-2 days late',      head: '#166534', border: '#bbf7d0', thBg: '#dcfce7', thText: '#14532d', rowBorder: '#dcfce7' },
+]
 
 /**
- * Renders ONE grouped summary email listing overdue POs.
+ * Renders ONE progressive-escalation summary email for a single recipient.
+ * POs are grouped into Serious / Concerning / Early sections; empty sections
+ * are skipped; each section caps at 30 rows.
  *
- * @param {Array}  sections      — [{ heading, tone: 'red'|'amber'|'green', rows: [{ po, days, person }] }]
- *                                 `po` is the po_orders row, `days` the days-overdue number,
- *                                 `person` the assigned buyer/logistics name (or falsy for unassigned)
- * @param {string} recipientType — 'purchase' | 'logistics' | 'master' (labels the assignee column)
- * @param {string} timeLabel     — '9am' | '1pm' | '6pm' (shown in the intro line)
+ * @param {Array} items — [{ po, daysLate, level }]  (level: 'serious'|'concerning'|'early')
  * @returns {string} full HTML email
  */
-function renderSummaryEmail(sections, recipientType, timeLabel) {
+function renderSummaryEmail(items) {
   const nowIST = new Date().toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
     day: '2-digit', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit', hour12: true,
   })
-  const personLabel =
-    recipientType === 'purchase'  ? 'Buyer' :
-    recipientType === 'logistics' ? 'Logistics Person' : 'Assigned To'
 
-  const sectionHtml = sections.map(({ heading, tone = 'red', rows }) => {
-    const t = SECTION_TONES[tone] || SECTION_TONES.red
+  const sectionHtml = SUMMARY_SECTIONS.map(sec => {
+    const rows = items
+      .filter(i => i.level === sec.key)
+      .sort((a, b) => b.daysLate - a.daysLate)
+    if (!rows.length) return ''
     const shown = rows.slice(0, SUMMARY_MAX_ROWS)
     const hidden = rows.length - shown.length
 
-    const th = txt => `<th style="padding:9px 12px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:${t.thText};font-weight:600;white-space:nowrap">${txt}</th>`
-    const td = (val, extra = '') => `<td style="padding:9px 12px;border-bottom:1px solid ${t.rowBorder};font-size:12px;color:#374151;${extra}">${val ?? '&mdash;'}</td>`
+    const th = txt => `<th style="padding:9px 12px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:${sec.thText};font-weight:600;white-space:nowrap">${txt}</th>`
+    const td = (val, extra = '') => `<td style="padding:9px 12px;border-bottom:1px solid ${sec.rowBorder};font-size:12px;color:#374151;${extra}">${val ?? '&mdash;'}</td>`
 
-    const bodyRows = shown.map(({ po, days, person }) => `<tr>
+    const bodyRows = shown.map(({ po, daysLate }) => `<tr>
       ${td(po.po_number || '&mdash;', 'font-weight:600;color:#111827;white-space:nowrap')}
       ${td(po.mr_number || '&mdash;', 'white-space:nowrap')}
       ${td(po.rig_name || '&mdash;')}
       ${td(po.vendor_name || '&mdash;')}
-      ${td(person || 'Not assigned', person ? '' : 'color:#9ca3af;font-style:italic')}
+      ${td(`${daysLate}d`, 'font-weight:700;color:#dc2626;text-align:center')}
       ${td(po.status || '&mdash;', 'white-space:nowrap')}
-      ${td(`${days}d`, 'font-weight:700;color:#dc2626;text-align:center')}
     </tr>`).join('')
 
     return `
-    <h2 style="margin:26px 0 10px;font-size:14px;font-weight:700;color:${t.head};letter-spacing:0.2px">${heading}</h2>
-    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${t.border};border-radius:8px;overflow:hidden;border-collapse:collapse">
+    <h2 style="margin:26px 0 10px;font-size:14px;font-weight:700;color:${sec.head};letter-spacing:0.2px">${sec.title} (${rows.length} PO${rows.length !== 1 ? 's' : ''})</h2>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${sec.border};border-radius:8px;overflow:hidden;border-collapse:collapse">
       <thead>
-        <tr style="background:${t.thBg}">
-          ${th('PO Number')}${th('MR Number')}${th('Rig')}${th('Vendor')}${th(personLabel)}${th('Status')}${th('Days Overdue')}
+        <tr style="background:${sec.thBg}">
+          ${th('PO Number')}${th('MR Number')}${th('Rig')}${th('Vendor')}${th('Days Late')}${th('Current Status')}
         </tr>
       </thead>
       <tbody style="background:#ffffff">${bodyRows}</tbody>
     </table>
-    ${hidden > 0 ? `<p style="margin:8px 0 0;font-size:12px;color:#6b7280;font-style:italic">&hellip; and ${hidden} more. See full list at link below.</p>` : ''}`
+    ${hidden > 0 ? `<p style="margin:8px 0 0;font-size:12px;color:#6b7280;font-style:italic">&hellip; and ${hidden} more overdue PO${hidden !== 1 ? 's' : ''}. See full list at link.</p>` : ''}`
   }).join('')
 
   const body = `
     <p style="margin:0 0 6px;font-size:16px;font-weight:600;color:#111827">Overdue Purchase Order Summary</p>
-    <p style="margin:0 0 4px;font-size:13px;color:#6b7280">
-      Below is the summary of Purchase Orders requiring your attention as of <strong>${nowIST} IST</strong>.
+    <p style="margin:0 0 4px;font-size:13px;color:#6b7280;line-height:1.6">
+      Below is a summary of Purchase Orders past their promised dates as of <strong>${nowIST} IST</strong>.
+      Days-late calculated from Promised Ready Date (vendor side) or Material Received Date (logistics side).
     </p>
     ${sectionHtml}
     <p style="margin:26px 0 0;font-size:13px;color:#374151">
@@ -556,7 +555,7 @@ function renderSummaryEmail(sections, recipientType, timeLabel) {
       This is an automated alert from JDIL Navigation. Please do not reply.
     </p>
   `
-  return emailBase(`${timeLabel} summary`, body)
+  return emailBase('Overdue PO Summary', body)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -3,15 +3,13 @@ const { supabase }                            = require('../utils/supabaseAdmin'
 const { requireAuth }                         = require('../middleware/authMiddleware')
 const { validateUpdateFields, canCreatePO, SYSTEM_FIELDS } = require('../utils/fieldPermissions')
 const { validateFieldLengths } = require('../utils/validate')
-const { calcStatus, daysElapsed, overdueDays } = require('../utils/poHelpers')
+const { calcStatus, daysElapsed, isVendorStale, isLogisticsStale } = require('../utils/poHelpers')
 const {
   sendEmail,
   newPOEmail,
   statusChangedEmail,
   partialDeliveryEmail,
 } = require('../utils/email')
-
-const OVERDUE_DAYS = 45
 
 // ─── Pipeline stage groups (for email routing) ───────────────────────────────
 // Entering a LOGISTICS stage from a PURCHASE stage → notify logistics team
@@ -80,6 +78,18 @@ router.get('/search-delivered', requireAuth, async (req, res) => {
   res.json((pos || []).map(p => ({ ...p, line_items: itemsByPo[p.id] || [] })))
 })
 
+// ─── GET /api/po/grace-period/count — POs currently in alert grace period ────
+// Must be declared BEFORE '/:id' so it isn't captured as an id.
+router.get('/grace-period/count', requireAuth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' })
+  const { count, error } = await supabase
+    .from('po_orders')
+    .select('id', { count: 'exact', head: true })
+    .eq('alert_grace_period', true)
+  if (error) return res.status(500).json({ error: error.message })
+  res.json({ count: count || 0 })
+})
+
 // ─── GET single PO ──────────────────────────────────────────────────────────
 router.get('/:id', requireAuth, async (req, res) => {
   const { data, error } = await supabase
@@ -115,9 +125,10 @@ router.post('/', requireAuth, async (req, res) => {
 
   body.created_by   = req.user.id
   body.updated_at   = new Date().toISOString()
-  body.status       = calcStatus(body)
-  body.days_elapsed = daysElapsed(body.po_date)
-  body.is_stale     = overdueDays(body) > OVERDUE_DAYS
+  body.status            = calcStatus(body)
+  body.days_elapsed      = daysElapsed(body.po_date)
+  body.is_stale          = isVendorStale(body)
+  body.is_delivery_stale = isLogisticsStale(body)
 
   const { data, error } = await supabase.from('po_orders').insert(body).select().single()
   if (error) return res.status(400).json({ error: error.message })
@@ -213,11 +224,10 @@ router.patch('/:id', requireAuth, async (req, res) => {
   const newElapsed = daysElapsed(merged.po_date)
   const oldStatus  = current.status
 
-  // Recompute stale flags per stage-based definitions; auto-clear alerts when a
-  // PO moves out of its stuck state.
-  const overdue         = overdueDays(merged) > OVERDUE_DAYS
-  const isStale         = PURCHASE_STAGES.has(newStatus) && overdue
-  const isDeliveryStale = LOGISTICS_STAGES.has(newStatus) && !merged.delivered_to_rig_date && overdue
+  // Recompute stale flags per the progressive (day-1+) definitions; auto-clear
+  // alerts when a PO moves out of its stuck state.
+  const isStale         = isVendorStale(merged)
+  const isDeliveryStale = isLogisticsStale(merged)
 
   const updatePayload = {
     ...sanitised,
@@ -229,6 +239,17 @@ router.patch('/:id', requireAuth, async (req, res) => {
   }
   if (!isStale)         updatePayload.last_stale_alert_sent = null
   if (!isDeliveryStale) updatePayload.last_delivery_stale_alert_sent = null
+
+  // Auto-clear the alert grace period once the PO moves OUT of a stuck state
+  // (non-stuck stage, or delivery to rig recorded).
+  const stillStuck = PURCHASE_STAGES.has(newStatus) ||
+    (LOGISTICS_STAGES.has(newStatus) && !merged.delivered_to_rig_date)
+  if (current.alert_grace_period && !stillStuck) {
+    updatePayload.alert_grace_period  = false
+    updatePayload.grace_period_reason = null
+    updatePayload.grace_period_set_at = null
+    updatePayload.grace_period_set_by = null
+  }
 
   const { data, error } = await supabase
     .from('po_orders').update(updatePayload).eq('id', req.params.id).select().single()
@@ -474,6 +495,72 @@ router.post('/:id/clear-alerts', requireAuth, async (req, res) => {
     reason: `Manual alert clear by ${req.user.email || req.user.id}`,
     changed_at: new Date().toISOString(),
   }).catch(e => console.error('[clear-alerts] audit error:', e))
+
+  res.json({ success: true, data })
+})
+
+// ─── POST /api/po/grace-period/clear-all — admin: end grace period globally ──
+// All currently grace-period POs immediately become eligible for alert emails.
+router.post('/grace-period/clear-all', requireAuth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' })
+
+  const { data, error } = await supabase
+    .from('po_orders')
+    .update({
+      alert_grace_period: false, grace_period_reason: null,
+      grace_period_set_at: null, grace_period_set_by: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('alert_grace_period', true)
+    .select('id')
+  if (error) return res.status(400).json({ error: error.message })
+
+  const cleared = (data || []).length
+  await supabase.from('audit_log').insert({
+    po_id: null, changed_by: req.user.id, field_changed: 'alert_grace_period',
+    old_value: `true (${cleared} POs)`, new_value: 'false (all)',
+    reason: `Grace period cleared for all POs by ${req.user.email || req.user.id}`,
+    changed_at: new Date().toISOString(),
+  }).catch(e => console.error('[grace clear-all] audit error:', e))
+
+  res.json({ success: true, cleared })
+})
+
+// ─── POST /api/po/:id/grace-period — admin: add/remove single-PO grace period ─
+// Body: { enabled: boolean, reason?: string }
+router.post('/:id/grace-period', requireAuth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' })
+
+  const enabled = req.body.enabled === true
+  const reason  = String(req.body.reason || '').trim()
+  if (enabled && !reason) {
+    return res.status(400).json({ error: 'A reason is required to add a PO to the grace period' })
+  }
+
+  const patch = enabled
+    ? {
+        alert_grace_period: true,
+        grace_period_reason: reason.slice(0, 500),
+        grace_period_set_at: new Date().toISOString(),
+        grace_period_set_by: req.user.email || req.user.id,
+      }
+    : {
+        alert_grace_period: false, grace_period_reason: null,
+        grace_period_set_at: null, grace_period_set_by: null,
+      }
+
+  const { data, error } = await supabase
+    .from('po_orders')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', req.params.id).select().single()
+  if (error) return res.status(400).json({ error: error.message })
+
+  await supabase.from('audit_log').insert({
+    po_id: req.params.id, changed_by: req.user.id, field_changed: 'alert_grace_period',
+    old_value: String(!enabled), new_value: String(enabled),
+    reason: enabled ? `Grace period added: ${reason}` : `Grace period removed by ${req.user.email || req.user.id}`,
+    changed_at: new Date().toISOString(),
+  }).catch(e => console.error('[grace-period] audit error:', e))
 
   res.json({ success: true, data })
 })

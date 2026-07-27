@@ -25,9 +25,20 @@ export const PO_RIG_OPTIONS = [
 // Alias — always mirrors PO_RIG_OPTIONS so legacy imports keep working
 export const RIG_NAMES = PO_RIG_OPTIONS
 
+// Buyer team codes. The last two are literal names (new joiners without an
+// official code yet) used as their temporary team_code — NOT typos.
 export const BUYER_CODES = [
-  'AP-31', 'RT-13', 'MP', 'MB-42', 'DC-22',
-  'PM-29', 'AD-44', 'AC-36', 'UN-45', 'MC-38',
+  'AP-31',
+  'RT-13',
+  'MB-42',
+  'DC-22',
+  'PM-29',
+  'AD-44',
+  'AC-36',
+  'UN-45',
+  'MC-38',
+  'Sahil Kini',
+  'Anthony Ranjire',
 ]
 
 export const LOGISTICS_CODES = [

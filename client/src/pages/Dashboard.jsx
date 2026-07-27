@@ -388,7 +388,7 @@ export default function Dashboard() {
         <KPICard
           title="Stale POs"
           value={kpis.staleCount}
-          sub={`> ${OVERDUE_DAYS} days past promised`}
+          sub="past promised ready date"
           color="red"
           onClick={() => goToPurchase('stale')}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>}
@@ -396,7 +396,7 @@ export default function Dashboard() {
         <KPICard
           title="Delayed Deliveries"
           value={kpis.delayedCount}
-          sub="stuck in logistics > 45d"
+          sub="awaiting delivery to rig"
           color="red"
           onClick={() => goToPurchase('delayed-delivery')}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>}
