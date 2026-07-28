@@ -1,8 +1,13 @@
+import { EMAIL_WHITELIST } from './constants'
+
 export const ALLOWED_DOMAIN = 'jindalmumbai.com'
 export const DOMAIN_ERROR   = 'Only @jindalmumbai.com email addresses are allowed'
 
 export function isAllowedEmail(email = '') {
-  return email.trim().toLowerCase().endsWith(`@${ALLOWED_DOMAIN}`)
+  const normalized = email.trim().toLowerCase()
+  if (normalized.endsWith(`@${ALLOWED_DOMAIN}`)) return true
+  if (EMAIL_WHITELIST.includes(normalized)) return true
+  return false
 }
 
 // ─── OTP lockout helpers (stored in localStorage per email) ──────────────────

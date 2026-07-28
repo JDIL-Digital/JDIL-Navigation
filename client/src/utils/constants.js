@@ -156,3 +156,9 @@ export const HUB_COORDINATES = {
 }
 
 export const OVERDUE_DAYS = 45
+
+// Email addresses that bypass the @jindalmumbai.com login/registration
+// restriction. Keep entries lowercase (matched against a normalized email).
+export const EMAIL_WHITELIST = [
+  'advisor@jindaldrilling.in',
+]

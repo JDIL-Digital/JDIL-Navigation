@@ -7,6 +7,22 @@
 const PINTO   = 'minguel.pinto@jindalmumbai.com'   // vendor-side owner / fallback
 const MOORTHY = 'moorthy@jindalmumbai.com'         // logistics-side owner / fallback
 
+// ── Login domain restriction + whitelist exceptions ──────────────────────────
+// Mirror of client/src/utils/constants.js EMAIL_WHITELIST — keep the two in
+// sync. Entries must be lowercase (matched against a normalized email).
+const ALLOWED_DOMAIN = 'jindalmumbai.com'
+const EMAIL_WHITELIST = [
+  'advisor@jindaldrilling.in',
+]
+
+/** True if the email is on the allowed domain OR an explicit whitelist entry. */
+function isAllowedEmail(email = '') {
+  const normalized = String(email).trim().toLowerCase()
+  if (normalized.endsWith(`@${ALLOWED_DOMAIN}`)) return true
+  if (EMAIL_WHITELIST.includes(normalized)) return true
+  return false
+}
+
 // Pipeline stages by owning team (used to classify the two escalation flows).
 const PURCHASE_STAGES  = ['MR Created', 'PO Released', 'Buyer Assigned', 'Vendor Confirmed']
 const LOGISTICS_STAGES = ['At JDIL Location', 'Dispatched from JDIL', 'In Transit to JDIL', 'In Transit to Rig']
@@ -68,6 +84,7 @@ function levelForDays(daysLate) {
 
 module.exports = {
   PINTO, MOORTHY,
+  ALLOWED_DOMAIN, EMAIL_WHITELIST, isAllowedEmail,
   PURCHASE_STAGES, LOGISTICS_STAGES,
   RIG_MANAGERS, getRigManager,
   ESCALATION_LEVELS, levelForDays,
