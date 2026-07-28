@@ -1,6 +1,5 @@
 const { supabase } = require('../utils/supabaseAdmin')
-
-const ALLOWED_DOMAIN = 'jindalmumbai.com'
+const { isAllowedEmail } = require('../utils/constants')
 
 /**
  * Verifies the Supabase JWT from the Authorization header,
@@ -21,9 +20,10 @@ async function requireAuth(req, res, next) {
     return res.status(401).json({ error: 'Invalid or expired token' })
   }
 
-  // Enforce email domain restriction
-  if (!user.email?.toLowerCase().endsWith(`@${ALLOWED_DOMAIN}`)) {
-    return res.status(403).json({ error: `Only @${ALLOWED_DOMAIN} email addresses are allowed` })
+  // Enforce email domain restriction (with whitelist exceptions).
+  // Error message deliberately does not reveal the whitelist.
+  if (!isAllowedEmail(user.email)) {
+    return res.status(403).json({ error: 'Only @jindalmumbai.com email addresses are allowed' })
   }
 
   // Fetch the profile row for role + is_active + name/email (used in email attribution)
