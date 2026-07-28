@@ -459,7 +459,7 @@ export default function PODetailPanel({ po, onClose, onSave }) {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">
-                      🕓 Alert grace period active — excluded from escalation emails
+                      🕓 Alert grace period active — marked as known backlog (alerts still sent)
                     </p>
                     <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5 truncate">
                       {form.grace_period_reason || 'No reason recorded'}
@@ -501,7 +501,7 @@ export default function PODetailPanel({ po, onClose, onSave }) {
               <button
                 onClick={() => setGraceFormOpen(true)}
                 className="text-xs text-gray-500 dark:text-gray-400 hover:text-amber-700 dark:hover:text-amber-400 transition-colors">
-                🕓 Add to grace period (mute escalation emails for this PO)
+                🕓 Add to grace period (mark this PO as known backlog)
               </button>
             )}
             {graceError && (

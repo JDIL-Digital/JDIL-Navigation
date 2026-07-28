@@ -63,13 +63,107 @@ app.get('/api/health', (_req, res) =>
 // Must come AFTER the API routes so /api/* is handled first.
 if (IS_PROD) {
   const clientDist = path.join(__dirname, '../client/dist')
+  const fs = require('fs')
 
   // Serve static assets (JS, CSS, images, etc.)
+  // robots.txt is emitted into dist by Vite from client/public/ and is served here.
   app.use(express.static(clientDist))
 
-  // Any non-API route gets the React index.html so client-side routing works
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(clientDist, 'index.html'))
+  // Governance endpoints that are NOT published as static files must return a
+  // real 404 — never the SPA shell — so crawlers see an honest response.
+  app.get('/sitemap.xml', (_req, res) => res.status(404).end())
+  app.get('/llms.txt',    (_req, res) => res.status(404).end())
+
+  // Per-route metadata for public auth pages.
+  // These are internal utility pages — crawlers should not index them.
+  const AUTH_ROUTE_META = {
+    '/login': {
+      title: 'Login | JDIL Navigation',
+      description: 'Secure employee sign-in for the JDIL Navigation material tracking system.',
+      ogTitle: 'JDIL Navigation Login',
+      ogDescription: 'Secure employee sign-in for JDIL Navigation.',
+    },
+    '/admin-login': {
+      title: 'Admin Login | JDIL Navigation',
+      description: 'Administrator sign-in for the JDIL Navigation material tracking system.',
+      ogTitle: 'JDIL Navigation Admin Login',
+      ogDescription: 'Administrator sign-in for JDIL Navigation.',
+    },
+    '/register': {
+      title: 'Register | JDIL Navigation',
+      description: 'Request an account for the JDIL Navigation material tracking system.',
+      ogTitle: 'JDIL Navigation Registration',
+      ogDescription: 'Request an account for JDIL Navigation.',
+    },
+    '/forgot-password': {
+      title: 'Forgot Password | JDIL Navigation',
+      description: 'Reset your JDIL Navigation account password.',
+      ogTitle: 'JDIL Navigation Password Reset',
+      ogDescription: 'Reset your JDIL Navigation account password.',
+    },
+    '/reset-password': {
+      title: 'Reset Password | JDIL Navigation',
+      description: 'Set a new password for your JDIL Navigation account.',
+      ogTitle: 'JDIL Navigation Password Reset',
+      ogDescription: 'Set a new password for your JDIL Navigation account.',
+    },
+  }
+
+  // Handler that injects per-route meta tags and sends noindex headers.
+  function serveAuthRoute(meta) {
+    return (_req, res) => {
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow')
+      try {
+        let html = fs.readFileSync(path.join(clientDist, 'index.html'), 'utf8')
+        const injected = [
+          `<title>${meta.title}</title>`,
+          `<meta name="description" content="${meta.description}" />`,
+          `<meta name="robots" content="noindex, nofollow" />`,
+          `<meta property="og:title" content="${meta.ogTitle}" />`,
+          `<meta property="og:description" content="${meta.ogDescription}" />`,
+          `<meta name="twitter:card" content="summary" />`,
+        ].join('\n    ')
+        html = html.replace('<title>JDIL Navigation — Material Tracking</title>', injected)
+        res.setHeader('Content-Type', 'text/html')
+        res.send(html)
+      } catch {
+        res.sendFile(path.join(clientDist, 'index.html'))
+      }
+    }
+  }
+
+  // Register specific handlers for auth routes — inject noindex meta before the catch-all.
+  for (const [route, meta] of Object.entries(AUTH_ROUTE_META)) {
+    app.get(route, serveAuthRoute(meta))
+  }
+
+  // Known client-side routes that should receive the SPA shell.
+  const CLIENT_ROUTES = [
+    '/',
+    '/login',
+    '/admin-login',
+    '/register',
+    '/pending',
+    '/auth/callback',
+    '/forgot-password',
+    '/reset-password',
+    '/purchase',
+    '/logistics',
+    '/rig',
+    '/admin',
+    '/repair',
+    '/return',
+    '/replacement',
+    '/reverse-logistics',
+  ]
+
+  // Only serve index.html for known routes; return a real 404 for everything
+  // else so search engines do not treat unknown URLs as valid pages.
+  app.get('*', (req, res) => {
+    if (CLIENT_ROUTES.includes(req.path)) {
+      return res.sendFile(path.join(clientDist, 'index.html'))
+    }
+    res.status(404).end()
   })
 
   console.log(`[server] Serving React build from ${clientDist}`)
