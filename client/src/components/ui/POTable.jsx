@@ -25,7 +25,8 @@ export default function POTable({ orders, onRowClick, visibleColumns = 'purchase
             {visibleColumns === 'rig' && (
               <>
                 <th className="table-header hidden sm:table-cell">In Transit</th>
-                <th className="table-header hidden sm:table-cell">Delivered</th>
+                <th className="table-header hidden sm:table-cell">GRAN Date</th>
+                <th className="table-header hidden sm:table-cell">GRAN No.</th>
               </>
             )}
             {visibleColumns === 'purchase' && (
@@ -90,6 +91,7 @@ export default function POTable({ orders, onRowClick, visibleColumns = 'purchase
                     <>
                       <td className="table-cell text-xs hidden sm:table-cell">{formatDate(po.in_transit_rig_date)}</td>
                       <td className="table-cell text-xs hidden sm:table-cell">{formatDate(po.delivered_to_rig_date)}</td>
+                      <td className="table-cell text-xs hidden sm:table-cell">{po.grn_number || '—'}</td>
                     </>
                   )}
                   {visibleColumns === 'purchase' && (

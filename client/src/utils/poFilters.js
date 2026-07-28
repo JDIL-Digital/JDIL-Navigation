@@ -62,7 +62,8 @@ export function applyPOFilters(orders, f) {
       (o.mr_number || '').toLowerCase().includes(q) ||
       (o.material_description || '').toLowerCase().includes(q) ||
       (o.material_description_2 || '').toLowerCase().includes(q) ||
-      (o.vendor_name || '').toLowerCase().includes(q)
+      (o.vendor_name || '').toLowerCase().includes(q) ||
+      (o.grn_number || '').toLowerCase().includes(q)
     )
   }
 

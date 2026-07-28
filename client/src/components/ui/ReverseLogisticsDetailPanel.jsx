@@ -323,7 +323,7 @@ export default function ReverseLogisticsDetailPanel({ job, onClose, onSave }) {
               <div className="space-y-2">
                 {items.map((it, idx) => (
                   <div key={it.id || `new-${idx}`} className="grid grid-cols-12 gap-2 items-start bg-gray-50 dark:bg-gray-800/40 rounded-lg p-2.5 border border-gray-200 dark:border-gray-700">
-                    <div className="col-span-12 sm:col-span-3"><input className="input-field text-sm" value={it.item_name || ''} onChange={e => setItemField(idx, 'item_name', e.target.value)} placeholder="Item name *" /></div>
+                    <div className="col-span-12 sm:col-span-3"><input className="input-field text-sm" value={it.item_name || ''} onChange={e => setItemField(idx, 'item_name', e.target.value)} placeholder="Item code *" /></div>
                     <div className="col-span-12 sm:col-span-3"><input className="input-field text-sm" value={it.material_description || ''} onChange={e => setItemField(idx, 'material_description', e.target.value)} placeholder="Description" /></div>
                     <div className="col-span-4 sm:col-span-2"><input type="number" min="0" step="any" className="input-field text-sm" value={it.quantity ?? ''} onChange={e => setItemField(idx, 'quantity', e.target.value)} placeholder="Qty" /></div>
                     <div className="col-span-3 sm:col-span-1"><input className="input-field text-sm" value={it.unit || ''} onChange={e => setItemField(idx, 'unit', e.target.value)} placeholder="Unit" /></div>

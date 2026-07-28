@@ -391,7 +391,7 @@ function partialDeliveryEmail(po, item) {
     <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;border-collapse:collapse">
       ${detailRow('PO Number',          po.po_number, true)}
       ${detailRow('Rig / Location',     po.rig_name)}
-      ${detailRow('Item Name',          item.item_name)}
+      ${detailRow('Item Code',          item.item_name)}
       ${detailRow('Material',           item.material_description)}
       ${detailRow('Quantity Ordered',   `${ordered}${unit}`)}
       ${detailRow('Quantity Delivered', `${delivered}${unit}`, true)}

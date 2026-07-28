@@ -391,7 +391,7 @@ router.post('/:id/items', requireAuth, async (req, res) => {
     }))
 
   if (rows.length === 0) {
-    return res.status(400).json({ error: 'Every line item needs an item name' })
+    return res.status(400).json({ error: 'Every line item needs an item code' })
   }
 
   const { data, error } = await supabase.from('po_line_items').insert(rows).select()

@@ -259,7 +259,7 @@ export default function NewReverseLogisticsJobPanel({ jobType, onClose, onCreate
                 <div className="space-y-2">
                   {items.map((it, idx) => (
                     <div key={idx} className="grid grid-cols-12 gap-2 items-start bg-gray-50 dark:bg-gray-800/40 rounded-lg p-2.5 border border-gray-200 dark:border-gray-700">
-                      <div className="col-span-12 sm:col-span-4"><input className="input-field text-sm" value={it.item_name} onChange={e => setItem(idx, 'item_name', e.target.value)} placeholder="Item name *" /></div>
+                      <div className="col-span-12 sm:col-span-4"><input className="input-field text-sm" value={it.item_name} onChange={e => setItem(idx, 'item_name', e.target.value)} placeholder="Item code *" /></div>
                       <div className="col-span-12 sm:col-span-4"><input className="input-field text-sm" value={it.material_description} onChange={e => setItem(idx, 'material_description', e.target.value)} placeholder="Material description" /></div>
                       <div className="col-span-5 sm:col-span-2"><input type="number" min="0" step="any" className="input-field text-sm" value={it.quantity} onChange={e => setItem(idx, 'quantity', e.target.value)} placeholder="Qty" /></div>
                       <div className="col-span-5 sm:col-span-1"><input className="input-field text-sm" value={it.unit} onChange={e => setItem(idx, 'unit', e.target.value)} placeholder="Unit" /></div>

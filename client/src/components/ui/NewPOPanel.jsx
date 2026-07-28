@@ -139,7 +139,7 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
     // At least one line item with a name is required
     const validItems = lineItems.filter(it => it.item_name && it.item_name.trim())
     if (validItems.length === 0) {
-      setError('At least one line item with an item name is required.')
+      setError('At least one line item with an item code is required.')
       return
     }
 
@@ -373,7 +373,7 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
                       className="input-field text-sm"
                       value={it.item_name}
                       onChange={e => setLineItem(idx, 'item_name', e.target.value)}
-                      placeholder="Item name *"
+                      placeholder="Item code *"
                     />
                   </div>
                   <div className="col-span-12 sm:col-span-4">
@@ -419,7 +419,7 @@ export default function NewPOPanel({ onClose, onCreated, existingCount = 0 }) {
               ))}
             </div>
             <p className="text-xs text-gray-400 dark:text-gray-500 mt-1.5">
-              Item name & quantity ordered. Delivery quantities are tracked by the rig team after dispatch.
+              Item code & quantity ordered. Delivery quantities are tracked by the rig team after dispatch.
             </p>
           </div>
 

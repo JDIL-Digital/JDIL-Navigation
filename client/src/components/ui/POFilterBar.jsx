@@ -3,9 +3,10 @@ import { emptyPOFilters, hasActivePOFilters } from '../../utils/poFilters'
 import VendorAutocomplete from './VendorAutocomplete'
 
 const DATE_FIELDS = [
-  { value: 'po_date',             label: 'PO Date' },
-  { value: 'promised_ready_date', label: 'Promised Ready Date' },
-  { value: 'updated_at',          label: 'Last Updated' },
+  { value: 'po_date',              label: 'PO Date' },
+  { value: 'promised_ready_date',  label: 'Promised Ready Date' },
+  { value: 'delivered_to_rig_date', label: 'GRAN Date' },
+  { value: 'updated_at',           label: 'Last Updated' },
 ]
 
 /**
@@ -32,7 +33,7 @@ export default function POFilterBar({ filters, onChange, showBuyerCode = false, 
           <input
             type="text"
             className="input-field pl-9"
-            placeholder="Search PO, MR, material, vendor…"
+            placeholder="Search PO, MR, material, vendor, GRAN…"
             value={filters.search}
             onChange={e => set('search', e.target.value)}
           />
