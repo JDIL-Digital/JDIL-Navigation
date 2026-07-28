@@ -92,7 +92,8 @@ export function generatePDF(type, orders, profile) {
       ['Mode of Transport', po.mode_of_transport || '—'],
       ['Transporter Detail', po.transporter_details || '—'],
       ['In Transit to Rig/JDIL Location Date', formatDate(po.in_transit_rig_date)],
-      ['Delivered to Rig Date', formatDate(po.delivered_to_rig_date)],
+      ['GRAN Date', formatDate(po.delivered_to_rig_date)],
+      ['GRAN Number', po.grn_number || '—'],
       ['Remarks', po.remarks || '—'],
     ]
 
@@ -130,7 +131,7 @@ export function generatePDF(type, orders, profile) {
 
     doc.autoTable({
       startY: y,
-      head: [['PO #', 'MR #', 'Rig', 'Vendor', 'Material', 'Status', 'PO Date', 'Promise Date', 'Days', 'Delivered']],
+      head: [['PO #', 'MR #', 'Rig', 'Vendor', 'Material', 'Status', 'PO Date', 'Promise Date', 'Days', 'GRAN Date']],
       body: rows,
       theme: 'striped',
       headStyles: { fillColor: [26, 122, 60], textColor: 255, fontStyle: 'bold', fontSize: 8 },

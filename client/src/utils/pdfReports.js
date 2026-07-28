@@ -690,7 +690,7 @@ export async function generateSinglePOReport(po, auditLog = [], lineItems = []) 
     doc.autoTable({
       startY: y,
       margin: { left: MARGIN, right: MARGIN, top: HEADER_H + 10, bottom: 18 },
-      head: [['Item Name', 'Material Description', 'Unit', 'Ordered', 'Delivered', 'Pending', 'Status']],
+      head: [['Item Code', 'Material Description', 'Unit', 'Ordered', 'Delivered', 'Pending', 'Status']],
       body: lineItems.map(it => {
         const ordered   = Number(it.quantity_ordered)   || 0
         const delivered = Number(it.quantity_delivered)  || 0
@@ -748,8 +748,9 @@ export async function generateSinglePOReport(po, auditLog = [], lineItems = []) 
     startY: y,
     margin: { left: MARGIN, right: MARGIN, top: HEADER_H + 10, bottom: 18 },
     body: [
-      ['Delivered to Rig Date', formatDate(po.delivered_to_rig_date) || 'Not yet delivered'],
-      ['Total Days Elapsed',    `${elapsed} days since PO date`],
+      ['GRAN Date',          formatDate(po.delivered_to_rig_date) || 'Not yet delivered'],
+      ['GRAN Number',        po.grn_number || 'Not recorded'],
+      ['Total Days Elapsed', `${elapsed} days since PO date`],
     ],
     theme: 'grid',
     styles: { fontSize: 8.5, cellPadding: 2.5 },
@@ -845,7 +846,7 @@ export async function generateWeeklyReport(orders) {
   doc.autoTable({
     startY: y,
     margin: { left: MARGIN, right: MARGIN, top: HEADER_H + 8, bottom: 15 },
-    head: [['PO #', 'MR #', 'Rig', 'Vendor', 'Material Description', 'Status', 'PO Date', 'Promise Date', 'Days', 'Delivered']],
+    head: [['PO #', 'MR #', 'Rig', 'Vendor', 'Material Description', 'Status', 'PO Date', 'Promise Date', 'Days', 'GRAN Date']],
     body: weekOrders.map(o => [
       o.po_number || '—', o.mr_number || '—', o.rig_name || '—', o.vendor_name || '—',
       (reportMaterial(o) || '').substring(0, 32),
@@ -960,7 +961,7 @@ export async function generateMonthlyReport(orders) {
   doc.autoTable({
     startY: y,
     margin: { left: MARGIN, right: MARGIN, top: HEADER_H + 8, bottom: 15 },
-    head: [['PO #', 'MR #', 'Rig', 'Vendor', 'Material Description', 'Status', 'PO Date', 'Promise Date', 'Days', 'Delivered']],
+    head: [['PO #', 'MR #', 'Rig', 'Vendor', 'Material Description', 'Status', 'PO Date', 'Promise Date', 'Days', 'GRAN Date']],
     body: monthOrders.map(o => [
       o.po_number || '—', o.mr_number || '—', o.rig_name || '—', o.vendor_name || '—',
       (reportMaterial(o) || '').substring(0, 30), calcStatus(o),

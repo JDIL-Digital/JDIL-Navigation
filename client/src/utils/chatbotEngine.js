@@ -71,7 +71,7 @@ const KB_INTENTS = [
 5. Choose the Rig / Location.
 6. Type the Vendor name — pick from the autocomplete dropdown (contact & phone auto-fill).
 7. Your Buyer Code is filled in automatically from your profile.
-8. Add one or more Line Items (item name, description, quantity, unit).
+8. Add one or more Line Items (item code, description, quantity, unit).
 9. Click "Create PO".
 
 Your draft is auto-saved, so you can close and finish later.`,
@@ -84,7 +84,7 @@ Your draft is auto-saved, so you can close and finish later.`,
 `Each PO can have multiple line items:
 
 • In the New PO form, scroll to the "Line Items" section.
-• Each row has: Item Name, Material Description, Quantity Ordered, and Unit (e.g. pcs, kg, set).
+• Each row has: Item Code, Material Description, Quantity Ordered, and Unit (e.g. pcs, kg, set).
 • Click "+ Add Item" to add another row, or the trash icon to remove one.
 • At least one line item is required to create a PO.
 

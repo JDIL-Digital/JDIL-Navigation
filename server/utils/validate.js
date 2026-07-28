@@ -21,6 +21,7 @@ const FIELD_MAX_LENGTHS = {
   jdil_location: 60,
   material_collection_location: 120,
   material_received_location: 60,
+  grn_number: 100,
   dc_number_bkc: 100,
   dc_number_taloja: 100,
   dc_number_nagothane: 100,

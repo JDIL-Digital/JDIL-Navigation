@@ -17,7 +17,7 @@ export const ROLE_EDITABLE_FIELDS = {
     'material_received_date', 'material_received_location', 'logistics_team_code',
   ],
   rig: [
-    'delivered_to_rig_date', 'remarks', 'other_remarks',
+    'delivered_to_rig_date', 'grn_number', 'remarks', 'other_remarks',
   ],
   admin: null,  // null = all fields
   csuite: [],   // read-only

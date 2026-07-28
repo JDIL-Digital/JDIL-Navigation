@@ -69,7 +69,8 @@ const FIELD_SECTIONS = [
     key: 'rig',
     label: 'Rig Delivery',
     fields: [
-      { key: 'delivered_to_rig_date', label: 'Delivered to Rig Date', type: 'date' },
+      { key: 'delivered_to_rig_date', label: 'GRAN Date',   type: 'date' },
+      { key: 'grn_number',            label: 'GRAN Number', type: 'text', placeholder: 'Enter GRAN number' },
     ],
   },
   {
@@ -594,6 +595,7 @@ export default function PODetailPanel({ po, onClose, onSave }) {
                           className={baseClass}
                           value={form[f.key] || ''}
                           onChange={e => set(f.key, e.target.value)}
+                          placeholder={f.placeholder || ''}
                         />
                       )}
                     </div>
@@ -628,7 +630,7 @@ export default function PODetailPanel({ po, onClose, onSave }) {
                 <table className="w-full text-sm min-w-[420px]">
                   <thead>
                     <tr className="border-b border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
-                      <th className="text-left py-2 pr-2 font-medium">Item</th>
+                      <th className="text-left py-2 pr-2 font-medium">Item Code</th>
                       <th className="text-center py-2 px-2 font-medium">Ordered</th>
                       <th className="text-center py-2 px-2 font-medium">Delivered</th>
                       <th className="text-center py-2 px-2 font-medium">Pending</th>
