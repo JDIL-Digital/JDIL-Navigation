@@ -20,7 +20,9 @@ app.set('trust proxy', 1)
 const ALLOWED_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:4173',
-  'https://jdil-navigation.replit.app',
+  'https://jdil-navigation.replit.app',   // kept for backward compatibility
+  'https://jdilnavigation.com',           // custom domain
+  'https://www.jdilnavigation.com',       // custom domain (www)
 ]
 app.use(cors({
   origin(origin, cb) {

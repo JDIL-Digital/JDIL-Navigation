@@ -297,7 +297,7 @@ function accountApprovedEmail(user) {
     ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
     : null
 
-  const loginUrl = 'https://jdil-navigation.replit.app/login'
+  const loginUrl = 'https://jdilnavigation.com/login'
 
   const body = `
     <p style="margin:0 0 4px;font-size:22px;font-weight:700;color:#166534">Your JDIL Navigation account has been approved!</p>
