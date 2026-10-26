@@ -4,8 +4,9 @@ import { useAuth } from '../context/AuthContext'
 import { formatDate } from '../utils/helpers'
 import { BUYER_CODES, LOGISTICS_CODES, PO_RIG_OPTIONS } from '../utils/constants'
 import VendorsTab from '../components/ui/VendorsTab'
+import BCIntegrationTab from '../components/ui/BCIntegrationTab'
 
-const TABS = ['User Management', 'Audit Log', 'System Settings', 'Vendors']
+const TABS = ['User Management', 'Audit Log', 'System Settings', 'Vendors', 'BC Integration']
 
 // ── API helpers (call Express /api with the user's JWT) ───────────────────────
 async function apiFetch(path, method = 'GET', body = undefined) {
@@ -824,6 +825,11 @@ export default function AdminPage() {
           TAB 3 — VENDORS
       ══════════════════════════════════════════════ */}
       {tab === 3 && <VendorsTab />}
+
+      {/* ══════════════════════════════════════════════
+          TAB 4 — BC INTEGRATION
+      ══════════════════════════════════════════════ */}
+      {tab === 4 && <BCIntegrationTab />}
 
       {/* ── Edit User Modal ── */}
       {editingUser && (

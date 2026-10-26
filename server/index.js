@@ -48,6 +48,8 @@ const reportRoutes = require('./routes/reports')
 const vendorRoutes = require('./routes/vendors')
 const rlRoutes     = require('./routes/reverseLogistics')
 const settingsRoutes = require('./routes/settings')
+const bcMappingRoutes = require('./routes/bcMapping')
+const bcIntegrationRoutes = require('./routes/bcIntegration')
 
 app.use('/api/po',            poRoutes)
 app.use('/api/users',         userRoutes)
@@ -56,6 +58,8 @@ app.use('/api/reports',       reportRoutes)
 app.use('/api/vendors',       vendorRoutes)
 app.use('/api/rl',            rlRoutes)
 app.use('/api/settings',      settingsRoutes)
+app.use('/api/admin/bc-mapping', bcMappingRoutes)
+app.use('/api/admin/bc-integration', bcIntegrationRoutes)
 
 app.get('/api/health', (_req, res) =>
   res.json({ status: 'ok', env: IS_PROD ? 'production' : 'development', ts: new Date().toISOString() })

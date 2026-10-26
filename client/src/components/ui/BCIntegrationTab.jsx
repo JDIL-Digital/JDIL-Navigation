@@ -1,0 +1,1232 @@
+import { useState, useEffect, useMemo } from 'react'
+import { supabase } from '../../lib/supabase'
+
+// ── API helper (Express /api/admin/bc-mapping with JWT) ───────────────────────
+async function bcApi(path = '', method = 'GET', body = undefined) {
+  const { data: { session } } = await supabase.auth.getSession()
+  const res = await fetch(`/api/admin/bc-mapping${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  })
+  const json = await res.json()
+  if (!res.ok) throw new Error(json.error || 'Request failed')
+  return json
+}
+
+const fmtDateTime = d => {
+  if (!d) return '—'
+  try { return new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) }
+  catch { return d }
+}
+const isToday = d => {
+  if (!d) return false
+  const x = new Date(d), n = new Date()
+  return x.getFullYear() === n.getFullYear() && x.getMonth() === n.getMonth() && x.getDate() === n.getDate()
+}
+
+// ── Shared small pieces ───────────────────────────────────────────────────────
+function Spinner() {
+  return (
+    <div className="flex items-center justify-center py-16">
+      <div className="w-8 h-8 border-4 border-jdil-green border-t-transparent rounded-full animate-spin" />
+    </div>
+  )
+}
+
+function Toggle({ on, busy, onClick, title }) {
+  return (
+    <button
+      role="switch" aria-checked={on} disabled={busy} onClick={onClick} title={title}
+      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+        on ? 'bg-jdil-green' : 'bg-gray-300 dark:bg-gray-600'}`}
+    >
+      <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
+        on ? 'translate-x-4' : 'translate-x-0.5'}`} />
+    </button>
+  )
+}
+
+function ModalShell({ title, children, onClose, onSave, saving, saveLabel = 'Save', error, canSave = true }) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 px-4">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-sm p-6">
+        <h3 className="text-base font-bold text-gray-900 dark:text-gray-100 mb-4">{title}</h3>
+        <div className="space-y-3">{children}</div>
+        {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
+        <div className="flex gap-2 mt-5">
+          <button onClick={onSave} disabled={saving || !canSave}
+            className="btn-primary flex-1 flex items-center justify-center gap-2 disabled:opacity-60">
+            {saving && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+            {saving ? 'Saving…' : saveLabel}
+          </button>
+          <button onClick={onClose} className="btn-secondary flex-1">Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Clickable sort header. `col` is the field key; `sort` is { key, dir }.
+function Th({ label, col, sort, setSort, className = '' }) {
+  const active = sort.key === col
+  return (
+    <th className={`table-header cursor-pointer select-none ${className}`}
+      onClick={() => setSort(s => ({ key: col, dir: s.key === col && s.dir === 'asc' ? 'desc' : 'asc' }))}>
+      <span className="inline-flex items-center gap-1">
+        {label}
+        <span className="text-[10px] text-gray-400">{active ? (sort.dir === 'asc' ? '▲' : '▼') : ''}</span>
+      </span>
+    </th>
+  )
+}
+
+function useSorted(rows, sort) {
+  return useMemo(() => {
+    if (!sort.key) return rows
+    const sorted = [...rows].sort((a, b) => {
+      const av = a[sort.key], bv = b[sort.key]
+      if (av == null) return 1
+      if (bv == null) return -1
+      return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' })
+    })
+    return sort.dir === 'desc' ? sorted.reverse() : sorted
+  }, [rows, sort])
+}
+
+function ErrorBanner({ error, onRetry }) {
+  if (!error) return null
+  return (
+    <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm rounded-lg px-4 py-3">
+      {error}{onRetry && <> — <button onClick={onRetry} className="underline font-medium">retry</button></>}
+    </div>
+  )
+}
+
+const AddButton = ({ label, onClick }) => (
+  <button onClick={onClick} className="btn-primary flex items-center gap-2 text-sm">
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+    {label}
+  </button>
+)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SUB-TAB 1 — RIG MAPPING
+// ═══════════════════════════════════════════════════════════════════════════════
+function RigModal({ row, onClose, onSaved }) {
+  const isEdit = !!row?.bc_prefix
+  const [prefix, setPrefix]   = useState(row?.bc_prefix ?? '')
+  const [name, setName]       = useState(row?.jdil_rig_name ?? '')
+  const [notes, setNotes]     = useState(row?.notes ?? '')
+  const [active, setActive]   = useState(row?.active ?? true)
+  const [saving, setSaving]   = useState(false)
+  const [error, setError]     = useState('')
+
+  async function save() {
+    if (!isEdit && !prefix.trim()) { setError('BC prefix is required.'); return }
+    if (!name.trim()) { setError('JDIL rig name is required.'); return }
+    setSaving(true); setError('')
+    try {
+      if (isEdit) await bcApi(`/rigs/${encodeURIComponent(row.bc_prefix)}`, 'PATCH', { jdil_rig_name: name.trim(), active, notes: notes.trim() })
+      else        await bcApi('/rigs', 'POST', { bc_prefix: prefix.trim(), jdil_rig_name: name.trim(), notes: notes.trim() })
+      onSaved()
+    } catch (e) { setError(e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <ModalShell title={isEdit ? `Edit Rig Mapping — ${row.bc_prefix}` : 'Add Rig Mapping'}
+      onClose={onClose} onSave={save} saving={saving} error={error}>
+      <div>
+        <label className="label">BC Prefix {!isEdit && <span className="text-red-500">*</span>}</label>
+        <input className="input-field disabled:opacity-60" value={prefix} disabled={isEdit}
+          onChange={e => setPrefix(e.target.value)} autoFocus={!isEdit} placeholder="e.g. RD1" />
+      </div>
+      <div>
+        <label className="label">JDIL Rig Name <span className="text-red-500">*</span></label>
+        <input className="input-field" value={name} onChange={e => setName(e.target.value)} autoFocus={isEdit} placeholder="e.g. Discovery 1" />
+      </div>
+      <div>
+        <label className="label">Notes</label>
+        <input className="input-field" value={notes} onChange={e => setNotes(e.target.value)} />
+      </div>
+      {isEdit && (
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="accent-jdil-green w-4 h-4" />
+          <span className="text-sm text-gray-700 dark:text-gray-300">Active</span>
+        </label>
+      )}
+    </ModalShell>
+  )
+}
+
+function RigMappingSub() {
+  const [rows, setRows]       = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState('')
+  const [busy, setBusy]       = useState({})
+  const [editing, setEditing] = useState(null)
+  const [sort, setSort]       = useState({ key: 'prefix_length', dir: 'desc' })
+  const sorted = useSorted(rows, sort)
+
+  async function load() {
+    setLoading(true); setError('')
+    try { setRows(await bcApi('/rigs')) } catch (e) { setError(e.message) }
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function toggle(r) {
+    setBusy(b => ({ ...b, [r.bc_prefix]: true }))
+    try { await bcApi(`/rigs/${encodeURIComponent(r.bc_prefix)}`, 'PATCH', { active: !r.active }); await load() }
+    catch (e) { alert(e.message) }
+    setBusy(b => ({ ...b, [r.bc_prefix]: false }))
+  }
+  async function del(r) {
+    if (!window.confirm(`Deactivate rig mapping "${r.bc_prefix}" → "${r.jdil_rig_name}"? It will be marked inactive (not deleted).`)) return
+    setBusy(b => ({ ...b, [r.bc_prefix]: true }))
+    try { await bcApi(`/rigs/${encodeURIComponent(r.bc_prefix)}`, 'DELETE'); await load() }
+    catch (e) { alert(e.message) }
+    setBusy(b => ({ ...b, [r.bc_prefix]: false }))
+  }
+
+  const activeCount = rows.filter(r => r.active).length
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          {loading ? 'Loading…' : <><strong>{rows.length}</strong> total mappings ({activeCount} active, {rows.length - activeCount} inactive)</>}
+        </p>
+        <AddButton label="Add New Rig Mapping" onClick={() => setEditing({})} />
+      </div>
+      <ErrorBanner error={error} onRetry={load} />
+      {loading ? <Spinner /> : rows.length === 0 ? (
+        <p className="text-center py-12 text-sm text-gray-400">No rig mappings found</p>
+      ) : (
+        <div className="card overflow-hidden"><div className="overflow-x-auto">
+          <table className="w-full min-w-[680px]">
+            <thead><tr className="border-b border-gray-200 dark:border-gray-800">
+              <Th label="BC Prefix" col="bc_prefix" sort={sort} setSort={setSort} />
+              <Th label="JDIL Rig Name" col="jdil_rig_name" sort={sort} setSort={setSort} />
+              <Th label="Active" col="active" sort={sort} setSort={setSort} />
+              <th className="table-header">Notes</th>
+              <th className="table-header text-right pr-4">Actions</th>
+            </tr></thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {sorted.map(r => (
+                <tr key={r.bc_prefix} className={`hover:bg-gray-50 dark:hover:bg-gray-800/50 ${!r.active ? 'opacity-50' : ''}`}>
+                  <td className="table-cell font-mono text-xs font-medium">{r.bc_prefix}</td>
+                  <td className="table-cell text-sm">{r.jdil_rig_name}</td>
+                  <td className="table-cell"><Toggle on={r.active} busy={!!busy[r.bc_prefix]} onClick={() => toggle(r)}
+                    title={r.active ? 'Active — click to deactivate' : 'Inactive — click to activate'} /></td>
+                  <td className="table-cell text-xs text-gray-500 dark:text-gray-400">{r.notes || '—'}</td>
+                  <td className="table-cell"><div className="flex items-center justify-end gap-1.5">
+                    <button onClick={() => setEditing(r)} className="text-xs border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 px-2.5 py-1 rounded-md">Edit</button>
+                    <button onClick={() => del(r)} disabled={!!busy[r.bc_prefix]} className="text-xs bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-2.5 py-1 rounded-md">Delete</button>
+                  </div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div></div>
+      )}
+      {editing && <RigModal row={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await load() }} />}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SUB-TAB 2 — BUYER MAPPING
+// ═══════════════════════════════════════════════════════════════════════════════
+function BuyerModal({ row, onClose, onSaved }) {
+  const isEdit = !!row?.bc_buyer_code
+  const [code, setCode]       = useState(row?.bc_buyer_code ?? '')
+  const [jdil, setJdil]       = useState(row?.jdil_buyer_code ?? '')
+  const [fullName, setFull]   = useState(row?.full_name ?? '')
+  const [notes, setNotes]     = useState(row?.notes ?? '')
+  const [active, setActive]   = useState(row?.active ?? true)
+  const [saving, setSaving]   = useState(false)
+  const [error, setError]     = useState('')
+
+  async function save() {
+    if (!isEdit && !code.trim()) { setError('BC buyer code is required.'); return }
+    if (!jdil.trim()) { setError('JDIL buyer code is required.'); return }
+    setSaving(true); setError('')
+    try {
+      if (isEdit) await bcApi(`/buyers/${encodeURIComponent(row.bc_buyer_code)}`, 'PATCH', { jdil_buyer_code: jdil.trim(), full_name: fullName.trim(), active, notes: notes.trim() })
+      else        await bcApi('/buyers', 'POST', { bc_buyer_code: code.trim(), jdil_buyer_code: jdil.trim(), full_name: fullName.trim(), notes: notes.trim() })
+      onSaved()
+    } catch (e) { setError(e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <ModalShell title={isEdit ? `Edit Buyer Mapping — ${row.bc_buyer_code}` : 'Add Buyer Mapping'}
+      onClose={onClose} onSave={save} saving={saving} error={error}>
+      <div>
+        <label className="label">BC Buyer Code {!isEdit && <span className="text-red-500">*</span>}</label>
+        <input className="input-field disabled:opacity-60" value={code} disabled={isEdit}
+          onChange={e => setCode(e.target.value)} autoFocus={!isEdit} placeholder="e.g. Avinash P." />
+      </div>
+      <div>
+        <label className="label">JDIL Buyer Code <span className="text-red-500">*</span></label>
+        <input className="input-field" value={jdil} onChange={e => setJdil(e.target.value)} autoFocus={isEdit} placeholder="e.g. AP-31" />
+      </div>
+      <div>
+        <label className="label">Full Name</label>
+        <input className="input-field" value={fullName} onChange={e => setFull(e.target.value)} placeholder="e.g. Avinash Pol" />
+      </div>
+      <div>
+        <label className="label">Notes</label>
+        <input className="input-field" value={notes} onChange={e => setNotes(e.target.value)} />
+      </div>
+      {isEdit && (
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="accent-jdil-green w-4 h-4" />
+          <span className="text-sm text-gray-700 dark:text-gray-300">Active</span>
+        </label>
+      )}
+    </ModalShell>
+  )
+}
+
+function BuyerMappingSub() {
+  const [rows, setRows]       = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState('')
+  const [busy, setBusy]       = useState({})
+  const [editing, setEditing] = useState(null)
+  const [sort, setSort]       = useState({ key: 'bc_buyer_code', dir: 'asc' })
+  const sorted = useSorted(rows, sort)
+
+  async function load() {
+    setLoading(true); setError('')
+    try { setRows(await bcApi('/buyers')) } catch (e) { setError(e.message) }
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function toggle(r) {
+    setBusy(b => ({ ...b, [r.bc_buyer_code]: true }))
+    try { await bcApi(`/buyers/${encodeURIComponent(r.bc_buyer_code)}`, 'PATCH', { active: !r.active }); await load() }
+    catch (e) { alert(e.message) }
+    setBusy(b => ({ ...b, [r.bc_buyer_code]: false }))
+  }
+  async function del(r) {
+    if (!window.confirm(`Deactivate buyer mapping "${r.bc_buyer_code}" → "${r.jdil_buyer_code}"? It will be marked inactive (not deleted).`)) return
+    setBusy(b => ({ ...b, [r.bc_buyer_code]: true }))
+    try { await bcApi(`/buyers/${encodeURIComponent(r.bc_buyer_code)}`, 'DELETE'); await load() }
+    catch (e) { alert(e.message) }
+    setBusy(b => ({ ...b, [r.bc_buyer_code]: false }))
+  }
+
+  const activeCount = rows.filter(r => r.active).length
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          {loading ? 'Loading…' : <><strong>{rows.length}</strong> total mappings ({activeCount} active, {rows.length - activeCount} inactive)</>}
+        </p>
+        <AddButton label="Add New Buyer Mapping" onClick={() => setEditing({})} />
+      </div>
+      <ErrorBanner error={error} onRetry={load} />
+      {loading ? <Spinner /> : rows.length === 0 ? (
+        <p className="text-center py-12 text-sm text-gray-400">No buyer mappings found</p>
+      ) : (
+        <div className="card overflow-hidden"><div className="overflow-x-auto">
+          <table className="w-full min-w-[680px]">
+            <thead><tr className="border-b border-gray-200 dark:border-gray-800">
+              <Th label="BC Buyer Code" col="bc_buyer_code" sort={sort} setSort={setSort} />
+              <Th label="JDIL Buyer Code" col="jdil_buyer_code" sort={sort} setSort={setSort} />
+              <Th label="Full Name" col="full_name" sort={sort} setSort={setSort} />
+              <Th label="Active" col="active" sort={sort} setSort={setSort} />
+              <th className="table-header text-right pr-4">Actions</th>
+            </tr></thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {sorted.map(r => (
+                <tr key={r.bc_buyer_code} className={`hover:bg-gray-50 dark:hover:bg-gray-800/50 ${!r.active ? 'opacity-50' : ''}`}>
+                  <td className="table-cell text-sm font-medium">{r.bc_buyer_code}</td>
+                  <td className="table-cell font-mono text-xs">{r.jdil_buyer_code}</td>
+                  <td className="table-cell text-xs text-gray-500 dark:text-gray-400">{r.full_name || '—'}</td>
+                  <td className="table-cell"><Toggle on={r.active} busy={!!busy[r.bc_buyer_code]} onClick={() => toggle(r)}
+                    title={r.active ? 'Active — click to deactivate' : 'Inactive — click to activate'} /></td>
+                  <td className="table-cell"><div className="flex items-center justify-end gap-1.5">
+                    <button onClick={() => setEditing(r)} className="text-xs border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 px-2.5 py-1 rounded-md">Edit</button>
+                    {r.jdil_buyer_code === 'ACCOUNTS' ? (
+                      <button disabled title="System entry — cannot be deleted" className="text-xs bg-gray-300 dark:bg-gray-700 text-gray-400 dark:text-gray-500 px-2.5 py-1 rounded-md cursor-not-allowed">Delete</button>
+                    ) : (
+                      <button onClick={() => del(r)} disabled={!!busy[r.bc_buyer_code]} className="text-xs bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-2.5 py-1 rounded-md">Delete</button>
+                    )}
+                  </div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div></div>
+      )}
+      {editing && <BuyerModal row={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await load() }} />}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SUB-TAB 3 — BUYER ALIASES
+// ═══════════════════════════════════════════════════════════════════════════════
+function AliasModal({ buyers, onClose, onSaved }) {
+  const [alias, setAlias]   = useState('')
+  const [code, setCode]     = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState('')
+
+  async function save() {
+    if (!alias.trim()) { setError('Alias is required.'); return }
+    if (!code) { setError('Select the buyer this alias maps to.'); return }
+    setSaving(true); setError('')
+    try { await bcApi('/aliases', 'POST', { alias: alias.trim(), canonical_bc_code: code }); onSaved() }
+    catch (e) { setError(e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <ModalShell title="Add Alias" onClose={onClose} onSave={save} saving={saving} error={error}>
+      <div>
+        <label className="label">Alias <span className="text-red-500">*</span></label>
+        <input className="input-field" value={alias} onChange={e => setAlias(e.target.value)} autoFocus placeholder="e.g. Avinash P" />
+      </div>
+      <div>
+        <label className="label">Maps To (canonical buyer) <span className="text-red-500">*</span></label>
+        <select className="input-field" value={code} onChange={e => setCode(e.target.value)}>
+          <option value="">Select buyer…</option>
+          {buyers.map(b => <option key={b.bc_buyer_code} value={b.bc_buyer_code}>{b.bc_buyer_code} → {b.jdil_buyer_code}</option>)}
+        </select>
+      </div>
+    </ModalShell>
+  )
+}
+
+function AliasesSub() {
+  const [rows, setRows]       = useState([])
+  const [buyers, setBuyers]   = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState('')
+  const [busy, setBusy]       = useState({})
+  const [adding, setAdding]   = useState(false)
+
+  async function load() {
+    setLoading(true); setError('')
+    try {
+      const [a, b] = await Promise.all([bcApi('/aliases'), bcApi('/buyers')])
+      setRows(a); setBuyers(b)
+    } catch (e) { setError(e.message) }
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function toggleConfirmed(r) {
+    setBusy(b => ({ ...b, [r.id]: true }))
+    try { await bcApi(`/aliases/${r.id}`, 'PATCH', { confirmed: !r.confirmed }); await load() }
+    catch (e) { alert(e.message) }
+    setBusy(b => ({ ...b, [r.id]: false }))
+  }
+  async function del(r) {
+    if (!window.confirm(`Delete alias "${r.alias}"? This cannot be undone.`)) return
+    setBusy(b => ({ ...b, [r.id]: true }))
+    try { await bcApi(`/aliases/${r.id}`, 'DELETE'); await load() }
+    catch (e) { alert(e.message) }
+    setBusy(b => ({ ...b, [r.id]: false }))
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          {loading ? 'Loading…' : <><strong>{rows.length}</strong> alias{rows.length !== 1 ? 'es' : ''}</>}
+        </p>
+        <AddButton label="Add Alias" onClick={() => setAdding(true)} />
+      </div>
+      <ErrorBanner error={error} onRetry={load} />
+      {loading ? <Spinner /> : rows.length === 0 ? (
+        <p className="text-center py-12 text-sm text-gray-400">No aliases yet. Aliases provide typo-tolerance for BC buyer values.</p>
+      ) : (
+        <div className="card overflow-hidden"><div className="overflow-x-auto">
+          <table className="w-full min-w-[620px]">
+            <thead><tr className="border-b border-gray-200 dark:border-gray-800">
+              <th className="table-header">Alias</th>
+              <th className="table-header">Maps To</th>
+              <th className="table-header">Source</th>
+              <th className="table-header">Confirmed</th>
+              <th className="table-header text-right pr-4">Actions</th>
+            </tr></thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {rows.map(r => (
+                <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                  <td className="table-cell text-sm font-medium">{r.alias}</td>
+                  <td className="table-cell text-xs text-gray-600 dark:text-gray-400">
+                    {r.canonical ? <>{r.canonical.bc_buyer_code} <span className="text-gray-400">({r.canonical.jdil_buyer_code})</span></> : r.canonical_bc_code}
+                  </td>
+                  <td className="table-cell text-xs">
+                    <span className="bg-gray-100 dark:bg-gray-800 rounded px-2 py-0.5">{r.source || 'admin_added'}</span>
+                  </td>
+                  <td className="table-cell"><Toggle on={r.confirmed} busy={!!busy[r.id]} onClick={() => toggleConfirmed(r)}
+                    title={r.confirmed ? 'Confirmed' : 'Unconfirmed'} /></td>
+                  <td className="table-cell"><div className="flex items-center justify-end">
+                    <button onClick={() => del(r)} disabled={!!busy[r.id]} className="text-xs bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-2.5 py-1 rounded-md">Delete</button>
+                  </div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div></div>
+      )}
+      {adding && <AliasModal buyers={buyers} onClose={() => setAdding(false)} onSaved={async () => { setAdding(false); await load() }} />}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SUB-TAB 4 — DATA QUALITY ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
+const ALERT_ROW_BG = {
+  typo_detected: 'bg-yellow-50 dark:bg-yellow-900/10',
+  unknown_buyer: 'bg-orange-50 dark:bg-orange-900/10',
+  empty_buyer:   'bg-blue-50 dark:bg-blue-900/10',
+  unknown_rig:   'bg-red-50 dark:bg-red-900/10',
+}
+
+const ALERT_FILTERS = [
+  { value: 'unresolved',    label: 'All Unresolved' },
+  { value: 'resolved',      label: 'All Resolved' },
+  { value: 'all',           label: 'Everything' },
+  { value: 'unknown_buyer', label: 'Type: Unknown Buyer' },
+  { value: 'empty_buyer',   label: 'Type: Empty Buyer' },
+  { value: 'unknown_rig',   label: 'Type: Unknown Rig' },
+]
+
+function ResolveModal({ alert, onClose, onSaved }) {
+  const [notes, setNotes]   = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState('')
+
+  async function save() {
+    setSaving(true); setError('')
+    try { await bcApi(`/alerts/${alert.id}`, 'PATCH', { resolution_notes: notes.trim() }); onSaved() }
+    catch (e) { setError(e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <ModalShell title="Resolve Alert" onClose={onClose} onSave={save} saving={saving} saveLabel="Mark Resolved" error={error}>
+      <p className="text-xs text-gray-500 dark:text-gray-400">
+        {alert.alert_type} — <span className="font-medium">{alert.bc_value || '—'}</span>
+      </p>
+      <div>
+        <label className="label">Resolution notes</label>
+        <textarea rows={3} className="input-field resize-none" value={notes} onChange={e => setNotes(e.target.value)}
+          autoFocus placeholder="What was done to resolve this?" />
+      </div>
+    </ModalShell>
+  )
+}
+
+// Map an unknown-buyer alert to an existing buyer (creates an alias + resolves).
+function MapToBuyerModal({ alert, buyers, onClose, onSaved }) {
+  const [code, setCode]     = useState('')
+  const [note, setNote]     = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState('')
+
+  async function save() {
+    if (!code) { setError('Select a buyer to map to.'); return }
+    setSaving(true); setError('')
+    try { await bcApi(`/alerts/${alert.id}/resolve-with-alias`, 'POST', { canonical_bc_code: code, note: note.trim() }); onSaved() }
+    catch (e) { setError(e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <ModalShell title="Map to Existing Buyer" onClose={onClose} onSave={save} saving={saving} saveLabel="Create Alias & Resolve" error={error}>
+      <p className="text-xs text-gray-500 dark:text-gray-400">
+        An alias <span className="font-medium">{alert.bc_value}</span> will be created pointing to the selected buyer, and this alert resolved.
+      </p>
+      <div>
+        <label className="label">Map to buyer <span className="text-red-500">*</span></label>
+        <select className="input-field" value={code} onChange={e => setCode(e.target.value)}>
+          <option value="">Select buyer…</option>
+          {buyers.filter(b => b.active).map(b => (
+            <option key={b.bc_buyer_code} value={b.bc_buyer_code}>{b.bc_buyer_code} → {b.jdil_buyer_code}</option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className="label">Note (optional)</label>
+        <input className="input-field" value={note} onChange={e => setNote(e.target.value)} />
+      </div>
+    </ModalShell>
+  )
+}
+
+// Simple info modal showing the PO(s) recorded for an empty-buyer alert.
+function ViewPOsModal({ alert, onClose }) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 px-4">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-sm p-6">
+        <h3 className="text-base font-bold text-gray-900 dark:text-gray-100 mb-3">POs with empty buyer</h3>
+        <div className="space-y-1 text-sm text-gray-700 dark:text-gray-300">
+          <p>First document: <span className="font-mono">{alert.bc_document_no || '—'}</span></p>
+          <p>Total occurrences: <strong>{alert.occurrence_count ?? 1}</strong></p>
+        </div>
+        <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-3">
+          Alerts are grouped by value, so only the first document is recorded. Run a preview filtered to the rig to see all affected POs.
+        </p>
+        <button onClick={onClose} className="btn-secondary w-full mt-5">Close</button>
+      </div>
+    </div>
+  )
+}
+
+function AlertsSub() {
+  const [rows, setRows]       = useState([])
+  const [buyers, setBuyers]   = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState('')
+  const [filter, setFilter]   = useState('unresolved')
+  const [resolving, setResolving] = useState(null)   // ResolveModal
+  const [mapping, setMapping]     = useState(null)   // MapToBuyerModal
+  const [viewingPOs, setViewingPOs] = useState(null) // ViewPOsModal
+
+  async function load() {
+    setLoading(true); setError('')
+    try {
+      const [a, b] = await Promise.all([bcApi('/alerts?includeResolved=true'), bcApi('/buyers')])
+      setRows(a); setBuyers(b)
+    } catch (e) { setError(e.message) }
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const unresolved = rows.filter(r => !r.resolved).length
+  const filtered = rows.filter(r => {
+    if (filter === 'unresolved') return !r.resolved
+    if (filter === 'resolved')   return r.resolved
+    if (filter === 'all')        return true
+    return r.alert_type === filter   // type filters
+  })
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <span className="text-sm bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-full px-3 py-1 font-semibold">
+          {loading ? 'Loading…' : `${unresolved} unresolved alert${unresolved !== 1 ? 's' : ''}`}
+        </span>
+        <select className="input-field w-auto min-w-[200px]" value={filter} onChange={e => setFilter(e.target.value)}>
+          {ALERT_FILTERS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+        </select>
+      </div>
+      <ErrorBanner error={error} onRetry={load} />
+      {loading ? <Spinner /> : filtered.length === 0 ? (
+        <p className="text-center py-12 text-sm text-gray-400">
+          No alerts for this filter. Alerts are populated when a Preview Sync encounters unknown or empty buyer codes.
+        </p>
+      ) : (
+        <div className="card overflow-hidden"><div className="overflow-x-auto">
+          <table className="w-full min-w-[920px]">
+            <thead><tr className="border-b border-gray-200 dark:border-gray-800">
+              <th className="table-header">Alert Type</th>
+              <th className="table-header">BC Value</th>
+              <th className="table-header">Document(s)</th>
+              <th className="table-header">First Detected</th>
+              <th className="table-header">Last Seen</th>
+              <th className="table-header text-center">Occurrences</th>
+              <th className="table-header">Status</th>
+              <th className="table-header text-right pr-4">Actions</th>
+            </tr></thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {filtered.map(r => {
+                const occ = r.occurrence_count ?? 1
+                return (
+                  <tr key={r.id} className={ALERT_ROW_BG[r.alert_type] || ''}>
+                    <td className="table-cell text-xs font-medium">{r.alert_type}</td>
+                    <td className="table-cell text-xs">{r.bc_value || '—'}</td>
+                    <td className="table-cell text-xs font-mono">
+                      {r.bc_document_no || '—'}{occ > 1 ? <span className="font-sans text-gray-400"> +{occ - 1} more</span> : ''}
+                    </td>
+                    <td className="table-cell text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">{fmtDateTime(r.detected_at)}</td>
+                    <td className="table-cell text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">{fmtDateTime(r.last_seen_at || r.detected_at)}</td>
+                    <td className="table-cell text-xs text-center">{occ}</td>
+                    <td className="table-cell text-xs">
+                      {r.resolved
+                        ? <span className="bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full px-2 py-0.5">Resolved</span>
+                        : <span className="bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-full px-2 py-0.5">Open</span>}
+                    </td>
+                    <td className="table-cell"><div className="flex items-center justify-end gap-1.5 flex-wrap">
+                      {!r.resolved && r.alert_type === 'unknown_buyer' && (
+                        <button onClick={() => setMapping(r)} className="text-xs bg-jdil-green hover:brightness-110 text-white px-2.5 py-1 rounded-md">Map to Existing Buyer</button>
+                      )}
+                      {!r.resolved && r.alert_type === 'empty_buyer' && (
+                        <button onClick={() => setViewingPOs(r)} className="text-xs border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 px-2.5 py-1 rounded-md">View POs</button>
+                      )}
+                      {!r.resolved && (
+                        <button onClick={() => setResolving(r)} className="text-xs border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 px-2.5 py-1 rounded-md">Mark Resolved</button>
+                      )}
+                      {r.resolved && <span className="text-[11px] text-gray-400">by {r.resolved_by || '—'}</span>}
+                    </div></td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div></div>
+      )}
+      {resolving && <ResolveModal alert={resolving} onClose={() => setResolving(null)} onSaved={async () => { setResolving(null); await load() }} />}
+      {mapping && <MapToBuyerModal alert={mapping} buyers={buyers} onClose={() => setMapping(null)} onSaved={async () => { setMapping(null); await load() }} />}
+      {viewingPOs && <ViewPOsModal alert={viewingPOs} onClose={() => setViewingPOs(null)} />}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BC CONNECTION TEST (OAuth auth check — no data fetched)
+// ═══════════════════════════════════════════════════════════════════════════════
+function BCConnectionTest() {
+  const [status, setStatus] = useState('idle')  // idle | loading | success | error
+  const [result, setResult] = useState(null)    // success payload
+  const [err, setErr]       = useState(null)     // { error, hint }
+
+  async function run() {
+    setStatus('loading'); setResult(null); setErr(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/admin/bc-integration/test-auth', {
+        headers: { ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+      })
+      const json = await res.json().catch(() => ({}))
+      if (res.ok && json.success) { setResult(json); setStatus('success') }
+      else { setErr({ error: json.error || `Request failed (HTTP ${res.status})`, hint: json.hint }); setStatus('error') }
+    } catch (e) {
+      setErr({ error: e.message || 'Network error', hint: 'Check your connection and that you are signed in as an admin.' })
+      setStatus('error')
+    }
+  }
+
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-semibold text-jdil-green mb-0.5">BC Connection Test</h3>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+        Test if the server can authenticate with Business Central.
+      </p>
+
+      <button onClick={run} disabled={status === 'loading'}
+        className="btn-primary flex items-center gap-2 text-sm disabled:opacity-60 disabled:bg-gray-400">
+        {status === 'loading' && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+        {status === 'loading' ? 'Testing…' : 'Test Authentication'}
+      </button>
+
+      <div className="mt-4">
+        {status === 'idle' && (
+          <p className="text-xs text-gray-400 dark:text-gray-500 italic">Click the button to test the connection.</p>
+        )}
+
+        {status === 'loading' && (
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+            Contacting Business Central…
+          </div>
+        )}
+
+        {status === 'success' && result && (
+          <div className="flex items-start gap-2 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg px-4 py-3">
+            <svg className="w-5 h-5 text-green-600 dark:text-green-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            <p className="text-sm text-green-700 dark:text-green-400">
+              Authentication successful! Token received (length: {result.token_length} chars, expires in {result.expires_in_seconds} seconds)
+              {result.from_cache && <span className="text-green-600/70 dark:text-green-500/70"> · served from cache</span>}
+            </p>
+          </div>
+        )}
+
+        {status === 'error' && err && (
+          <div className="flex items-start gap-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-4 py-3">
+            <svg className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+            <div>
+              <p className="text-sm text-red-700 dark:text-red-400 font-medium">Authentication failed: {err.error}</p>
+              {err.hint && <p className="text-xs text-red-600/80 dark:text-red-400/70 mt-1">{err.hint}</p>}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BC DATA FETCH TEST (reads sample Blanket Orders — does NOT persist)
+// ═══════════════════════════════════════════════════════════════════════════════
+function Collapsible({ title, children, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="mt-3 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/60 hover:bg-gray-100 dark:hover:bg-gray-800">
+        <span>{title}</span>
+        <span className={`transition-transform ${open ? 'rotate-90' : ''}`}>▸</span>
+      </button>
+      {open && <div className="bg-gray-50 dark:bg-gray-900/40">{children}</div>}
+    </div>
+  )
+}
+
+function JsonBlock({ value }) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+  return (
+    <pre className="text-[11px] leading-relaxed font-mono text-gray-700 dark:text-gray-300 p-3 overflow-auto max-h-[600px] whitespace-pre">
+      {text}
+    </pre>
+  )
+}
+
+function DiscoverTable({ result }) {
+  const rowBg = a =>
+    a.kind === 'orderby' ? 'bg-yellow-50 dark:bg-yellow-900/10'
+    : a.filterable       ? 'bg-green-50 dark:bg-green-900/10'
+    :                      'bg-red-50 dark:bg-red-900/10'
+  const s = result.summary || {}
+  return (
+    <>
+      <div className="card overflow-hidden"><div className="overflow-x-auto">
+        <table className="w-full min-w-[720px]">
+          <thead><tr className="border-b border-gray-200 dark:border-gray-800">
+            <th className="table-header">#</th>
+            <th className="table-header">Description</th>
+            <th className="table-header">Status</th>
+            <th className="table-header">Result</th>
+          </tr></thead>
+          <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+            {(result.attempts || []).map(a => (
+              <tr key={a.attempt_number} className={rowBg(a)}>
+                <td className="table-cell text-xs align-top">{a.attempt_number}</td>
+                <td className="table-cell align-top">
+                  <div className="text-xs font-medium text-gray-800 dark:text-gray-200">{a.description}</div>
+                  <div className="text-[10px] font-mono text-gray-400 dark:text-gray-500 break-all mt-0.5">{a.full_url}</div>
+                </td>
+                <td className="table-cell text-xs align-top">{a.status_code ?? '—'}</td>
+                <td className="table-cell text-xs align-top">
+                  {a.kind === 'orderby'
+                    ? (a.filterable ? <span className="text-yellow-700 dark:text-yellow-400 font-medium">orderby supported ✓</span>
+                                    : <span className="text-red-700 dark:text-red-400 font-medium">orderby failed ✗</span>)
+                    : (a.filterable ? <span className="text-green-700 dark:text-green-400 font-medium">Filterable ✓</span>
+                                    : <span className="text-red-700 dark:text-red-400 font-medium">Not filterable ✗</span>)}
+                  {a.filterable && a.records_returned != null && <span className="text-gray-400"> ({a.records_returned} rec)</span>}
+                  {a.error && <div className="text-[11px] text-red-600/80 dark:text-red-400/70 mt-0.5 break-words">{a.error}</div>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div></div>
+      <div className="mt-3 bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-3 text-sm space-y-1">
+        <p><span className="font-medium text-gray-700 dark:text-gray-300">Filterable fields found:</span> {s.filterable_fields?.length ? s.filterable_fields.join(', ') : 'none'}</p>
+        {s.non_filterable_fields?.length > 0 && (
+          <p><span className="font-medium text-gray-700 dark:text-gray-300">Not filterable:</span> {s.non_filterable_fields.join(', ')}</p>
+        )}
+        <p><span className="font-medium text-gray-700 dark:text-gray-300">$orderby supported:</span> {s.orderby_supported ? 'yes' : 'no'}</p>
+        {s.trailing_slash_filtering_supported !== undefined && (
+          <p><span className="font-medium text-gray-700 dark:text-gray-300">Trailing-slash filtering supported:</span> {s.trailing_slash_filtering_supported ? 'yes' : 'no'}</p>
+        )}
+        <p><span className="font-medium text-jdil-green">Recommended strategy:</span> {s.recommended_filter_strategy}</p>
+        {s.recommended_sync_strategy && (
+          <p><span className="font-medium text-jdil-green">Recommended sync strategy:</span> {s.recommended_sync_strategy}</p>
+        )}
+      </div>
+    </>
+  )
+}
+
+function BCDataFetchTest() {
+  const [status, setStatus] = useState('idle')  // idle | loading | success | error
+  const [result, setResult] = useState(null)
+  const [err, setErr]       = useState(null)
+
+  async function run(type) {
+    setStatus('loading'); setResult(null); setErr(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch(`/api/admin/bc-integration/test-fetch?type=${type}`, {
+        headers: { ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+      })
+      const json = await res.json().catch(() => ({}))
+      if (res.ok && json.success) { setResult(json); setStatus('success') }
+      else { setErr({ error: json.error || `Request failed (HTTP ${res.status})`, hint: json.hint, response_body: json.response_body }); setStatus('error') }
+    } catch (e) {
+      setErr({ error: e.message || 'Network error', hint: 'Check your connection and that you are signed in as an admin.' })
+      setStatus('error')
+    }
+  }
+
+  const loading = status === 'loading'
+  const s = result?.summary
+
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-semibold text-jdil-green mb-0.5">BC Data Fetch Test</h3>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+        Fetch sample Blanket Orders from BC to verify data flow. This does NOT save data to the database.
+      </p>
+
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => run('simple')} disabled={loading}
+          className="btn-primary flex items-center gap-2 text-sm disabled:opacity-60 disabled:bg-gray-400">
+          {loading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+          Fetch Simple (Level 1 only)
+        </button>
+        <button onClick={() => run('full')} disabled={loading}
+          className="flex items-center gap-2 text-sm text-white px-4 py-2 rounded-lg font-medium bg-[#145f30] hover:bg-[#0f4a26] disabled:opacity-60 disabled:bg-gray-400">
+          {loading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+          Fetch Full (All 5 levels)
+        </button>
+        <button onClick={() => run('recent')} disabled={loading}
+          className="flex items-center gap-2 text-sm text-white px-4 py-2 rounded-lg font-medium bg-[#1976d2] hover:bg-[#145ea8] disabled:opacity-60 disabled:bg-gray-400">
+          {loading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+          Fetch Recent (July+ with full expand)
+        </button>
+        <button onClick={() => run('discover')} disabled={loading}
+          className="flex items-center gap-2 text-sm text-white px-4 py-2 rounded-lg font-medium bg-[#f57c00] hover:bg-[#d96c00] disabled:opacity-60 disabled:bg-gray-400">
+          {loading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+          Discover Filterable Fields
+        </button>
+      </div>
+
+      <div className="mt-4">
+        {status === 'idle' && (
+          <p className="text-xs text-gray-400 dark:text-gray-500 italic">Click a button to fetch sample data from Business Central.</p>
+        )}
+
+        {loading && (
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+            Fetching from BC…
+          </div>
+        )}
+
+        {status === 'success' && result && result.fetch_type === 'discover' && (
+          <DiscoverTable result={result} />
+        )}
+
+        {status === 'success' && result && result.fetch_type !== 'discover' && (
+          <>
+            <div className="flex items-start gap-2 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg px-4 py-3">
+              <svg className="w-5 h-5 text-green-600 dark:text-green-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              <div className="text-sm text-green-700 dark:text-green-400 space-y-0.5">
+                {result.fetch_type === 'recent' && (
+                  <p className="font-medium">Date filter applied: MRReleasedDate &gt;= '2026-07-01' (string comparison)</p>
+                )}
+                <p className="font-medium">
+                  Successfully fetched {result.records_returned} record{result.records_returned !== 1 ? 's' : ''} in {result.response_time_ms} ms
+                  <span className="font-normal text-green-600/80 dark:text-green-500/80"> ({result.fetch_type} fetch)</span>
+                </p>
+                <p>Response size: {(result.response_size_bytes / 1024).toFixed(1)} KB</p>
+                {s?.unique_rig_prefixes?.length > 0 && <p>Rig prefixes found: {s.unique_rig_prefixes.join(', ')}</p>}
+                {(result.fetch_type === 'full' || result.fetch_type === 'recent') && (
+                  <>
+                    <p>Buyer codes found: {s?.unique_buyer_codes?.length ? s.unique_buyer_codes.join(', ') : '—'}</p>
+                    <p>Empty buyer codes: {s?.empty_buyer_count ?? 0} of {s?.total_po_count ?? 0} POs</p>
+                  </>
+                )}
+                {s?.document_numbers?.length > 0 && <p className="break-all">Document numbers: {s.document_numbers.join(', ')}</p>}
+              </div>
+            </div>
+            <Collapsible title="Raw JSON Response">
+              <JsonBlock value={result.raw_data} />
+            </Collapsible>
+          </>
+        )}
+
+        {status === 'error' && err && (
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-4 py-3">
+            <div className="flex items-start gap-2">
+              <svg className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              <div>
+                <p className="text-sm text-red-700 dark:text-red-400 font-medium">Fetch failed: {err.error}</p>
+                {err.hint && <p className="text-xs text-red-600/80 dark:text-red-400/70 mt-1">{err.hint}</p>}
+              </div>
+            </div>
+            {err.response_body != null && (
+              <Collapsible title="BC Error Response">
+                <JsonBlock value={err.response_body} />
+              </Collapsible>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PREVIEW SYNC (DRY RUN) — fetches BC data, runs the processor, shows what WOULD sync
+// ═══════════════════════════════════════════════════════════════════════════════
+const RIG_PREFIX_OPTIONS = [
+  { value: '',        label: 'All rigs' },
+  { value: 'RD1',     label: 'RD1 - Discovery 1' },
+  { value: 'RD1DD',   label: 'RD1DD - Discovery 1 Dry Dock' },
+  { value: 'RV1',     label: 'RV1 - Virtue 1' },
+  { value: 'RV1DD',   label: 'RV1DD - Virtue 1 Dry Dock' },
+  { value: 'RJS',     label: 'RJS - Jindal Star' },
+  { value: 'RJSDD',   label: 'RJSDD - Jindal Star Dry Dock' },
+  { value: 'RJE',     label: 'RJE - Jindal Explorer' },
+  { value: 'RJEDD',   label: 'RJEDD - Jindal Explorer Dry Dock' },
+  { value: 'RJSUP',   label: 'RJSUP - Jindal Supreme' },
+  { value: 'RJSUPDD', label: 'RJSUPDD - Jindal Supreme Dry Dock' },
+  { value: 'MLU',     label: 'MLU - Mud Logging Unit' },
+  { value: 'DDD',     label: 'DDD - Directional Drilling' },
+  { value: 'TAWS',    label: 'TAWS - Taloja (TAWS)' },
+  { value: 'RIG',     label: 'RIG - Taloja (RIG)' },
+]
+
+const FISCAL_YEAR_OPTIONS = [
+  { value: '2627,2728', label: 'Current + Next (2627, 2728)' },
+  { value: '2627',      label: 'Current Only (2627)' },
+  { value: '2526,2627', label: 'Previous + Current (2526, 2627)' },
+]
+
+const ACTION_BADGE = {
+  INSERT: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400',
+  UPDATE: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400',
+  SKIP:   'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400',
+}
+
+function StatCard({ label, value, color = 'gray' }) {
+  const colors = {
+    gray:  'bg-gray-50 dark:bg-gray-800/60 text-gray-700 dark:text-gray-300',
+    green: 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400',
+  }
+  return (
+    <div className={`rounded-lg px-3 py-2 ${colors[color]}`}>
+      <div className="text-lg font-bold leading-none">{value}</div>
+      <div className="text-[11px] mt-1">{label}</div>
+    </div>
+  )
+}
+
+function PreviewSyncCard() {
+  const [prefix, setPrefix] = useState('')
+  const [fiscalYears, setFiscalYears] = useState('2627,2728')
+  const [status, setStatus] = useState('idle')   // idle | loading | success | error
+  const [result, setResult] = useState(null)
+  const [err, setErr]       = useState(null)
+
+  const rigLabel = RIG_PREFIX_OPTIONS.find(o => o.value === prefix)?.label || 'All rigs'
+
+  async function run() {
+    setStatus('loading'); setResult(null); setErr(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch(`/api/admin/bc-integration/preview-sync?rig_prefix=${encodeURIComponent(prefix)}&fiscal_years=${encodeURIComponent(fiscalYears)}`, {
+        headers: { ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+      })
+      const json = await res.json().catch(() => ({}))
+      if (res.ok && json.success) { setResult(json); setStatus('success') }
+      else { setErr({ error: json.error || `Request failed (HTTP ${res.status})`, hint: json.hint, response_body: json.response_body }); setStatus('error') }
+    } catch (e) {
+      setErr({ error: e.message || 'Network error', hint: 'Check your connection and that you are signed in as an admin.' })
+      setStatus('error')
+    }
+  }
+
+  const loading = status === 'loading'
+  const p = result?.preview
+  const rows = p ? p.blanket_orders.flatMap(bo => bo.pos_processed.map(po => ({ bo, po }))) : []
+  const autoAccountsCount = rows.filter(({ po }) => po.buyer_lookup?.auto_assigned_to_accounts).length
+
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-semibold text-jdil-green mb-0.5">Preview Sync (Dry Run)</h3>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+        Fetches real BC data, processes it through our transformation logic, and shows what WOULD be synced. No database changes.
+      </p>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <div>
+          <label className="label">Filter by Rig</label>
+          <select className="input-field w-auto min-w-[220px]" value={prefix} onChange={e => setPrefix(e.target.value)} disabled={loading}>
+            {RIG_PREFIX_OPTIONS.map(o => <option key={o.value || 'all'} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Fiscal Years</label>
+          <select className="input-field w-auto min-w-[220px]" value={fiscalYears} onChange={e => setFiscalYears(e.target.value)} disabled={loading}>
+            {FISCAL_YEAR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+        <button onClick={run} disabled={loading}
+          className="btn-primary flex items-center gap-2 text-sm disabled:opacity-60 disabled:bg-gray-400">
+          {loading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+          {loading ? 'Running…' : 'Run Preview'}
+        </button>
+      </div>
+
+      <div className="mt-4">
+        {status === 'idle' && (
+          <p className="text-xs text-gray-400 dark:text-gray-500 italic">Pick a rig filter (or All rigs) and click Run Preview.</p>
+        )}
+
+        {loading && (
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+            Fetching current fiscal year BOs for {rigLabel}…
+          </div>
+        )}
+
+        {status === 'error' && err && (
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-4 py-3">
+            <div className="flex items-start gap-2">
+              <svg className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              <div>
+                <p className="text-sm text-red-700 dark:text-red-400 font-medium">Preview failed: {err.error}</p>
+                {err.hint && <p className="text-xs text-red-600/80 dark:text-red-400/70 mt-1">{err.hint}</p>}
+              </div>
+            </div>
+            {err.response_body != null && (
+              <Collapsible title="BC Error Response"><JsonBlock value={err.response_body} /></Collapsible>
+            )}
+          </div>
+        )}
+
+        {status === 'success' && p && (
+          <div className="space-y-4">
+            {/* Section D — warnings */}
+            {p.unknown_rigs.length > 0 && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm rounded-lg px-4 py-2.5">
+                ⚠ Unknown rig prefix{p.unknown_rigs.length !== 1 ? 'es' : ''}: {p.unknown_rigs.join(', ')} — add a mapping in the Rig Mapping tab.
+              </div>
+            )}
+            {autoAccountsCount > 0 && (
+              <div className="bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 text-sm rounded-lg px-4 py-2.5">
+                {autoAccountsCount} PO{autoAccountsCount !== 1 ? 's' : ''} auto-assigned to Accounts team (unknown or empty BC buyer code).
+              </div>
+            )}
+            {p.bos_within_sync_range === 0 && (
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 text-yellow-700 dark:text-yellow-500 text-sm rounded-lg px-4 py-2.5">
+                Nothing to sync in this fetch (0 blanket orders within the sync range).
+              </div>
+            )}
+
+            {/* Section A — summary cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+              <StatCard label="Total BOs" value={p.total_bos} />
+              <StatCard label="Total POs" value={p.total_pos} />
+              <StatCard label="BOs within range" value={p.bos_within_sync_range} color="green" />
+              <StatCard label="BOs before cutoff" value={p.bos_before_cutoff} />
+              <StatCard label="Unknown rigs" value={p.unknown_rigs.length || 'None'} />
+              <StatCard label="Unknown buyers" value={p.unknown_buyers.length || 'None'} />
+            </div>
+            <p className="text-[11px] text-gray-400 dark:text-gray-500">
+              {result.rig_prefix_filter ? `Filter: ${result.rig_prefix_filter}/ · ` : ''}
+              {result.rig_prefix_filter && result.fiscal_years?.length ? `FY: ${result.fiscal_years.join(', ')} · ` : ''}
+              fetched {result.bc_response_size_kb} KB in {(result.fetch_time_ms / 1000).toFixed(1)}s · processed in {result.processing_time_ms} ms
+            </p>
+
+            {/* Section B — per-PO breakdown */}
+            {rows.length === 0 ? (
+              <p className="text-center py-8 text-sm text-gray-400">No POs returned for this filter.</p>
+            ) : (
+              <div className="card overflow-hidden"><div className="overflow-x-auto">
+                <table className="w-full min-w-[820px]">
+                  <thead><tr className="border-b border-gray-200 dark:border-gray-800">
+                    <th className="table-header">PO Number</th>
+                    <th className="table-header">MR Date</th>
+                    <th className="table-header">Rig</th>
+                    <th className="table-header">Vendor</th>
+                    <th className="table-header">Buyer</th>
+                    <th className="table-header">Status</th>
+                    <th className="table-header">Action</th>
+                  </tr></thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                    {rows.map(({ bo, po }, i) => {
+                      const td = po.transformed_data
+                      const autoAccounts = po.buyer_lookup.auto_assigned_to_accounts === true
+                      const cell = 'table-cell text-xs'
+                      const redCell = 'table-cell text-xs bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'
+                      return (
+                        <tr key={`${po.po_number}-${i}`} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                          <td className={`${cell} font-mono`}>{po.po_number || '—'}</td>
+                          <td className={cell}>{td.mr_date || '—'}</td>
+                          <td className={bo.rig_matched ? cell : redCell}>{bo.rig_matched ? (td.rig_name || '—') : `? ${bo.rig_prefix || ''}`}</td>
+                          <td className={cell}>{td.vendor_name || '—'}</td>
+                          <td className={autoAccounts ? `${cell} text-gray-400 dark:text-gray-500` : cell}>
+                            {autoAccounts
+                              ? po.buyer_lookup.full_name
+                              : <>{td.buyer_code}{td.buyer_code_raw ? <span className="text-gray-400"> ({td.buyer_code_raw})</span> : ''}</>}
+                          </td>
+                          <td className={cell}>{td.po_status || '—'}</td>
+                          <td className="table-cell">
+                            <span title={po.skip_reason || ''} className={`text-[11px] font-medium rounded-full px-2 py-0.5 ${ACTION_BADGE[po.action_needed] || ACTION_BADGE.SKIP}`}>
+                              {po.action_needed}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div></div>
+            )}
+
+            {/* Section C — raw preview JSON */}
+            <Collapsible title="Raw Preview Data"><JsonBlock value={p} /></Collapsible>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MAIN — BC INTEGRATION TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+const SUB_TABS = ['Rig Mapping', 'Buyer Mapping', 'Buyer Aliases', 'Data Quality Alerts']
+
+export default function BCIntegrationTab() {
+  const [sub, setSub] = useState(0)
+  return (
+    <div className="space-y-4">
+      {/* Connection test (above the sub-tabs) */}
+      <BCConnectionTest />
+
+      {/* Data fetch test (below connection test, above the sub-tabs) */}
+      <BCDataFetchTest />
+
+      {/* Preview sync dry-run (below data fetch, above the sub-tabs) */}
+      <PreviewSyncCard />
+
+      {/* Sub-tab bar */}
+      <div className="flex gap-1 border-b border-gray-200 dark:border-gray-800 overflow-x-auto scrollbar-none">
+        {SUB_TABS.map((t, i) => (
+          <button key={t} onClick={() => setSub(i)}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors shrink-0 whitespace-nowrap ${
+              sub === i ? 'border-jdil-green text-jdil-green' : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`}>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {sub === 0 && <RigMappingSub />}
+      {sub === 1 && <BuyerMappingSub />}
+      {sub === 2 && <AliasesSub />}
+      {sub === 3 && <AlertsSub />}
+    </div>
+  )
+}
