@@ -39,6 +39,7 @@ export const BUYER_CODES = [
   'MC-38',
   'Sahil Kini',
   'Anthony Ranjire',
+  'ACCOUNTS',   // system buyer — auto-assigned to unknown/empty BC buyers
 ]
 
 export const LOGISTICS_CODES = [

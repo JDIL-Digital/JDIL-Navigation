@@ -226,11 +226,16 @@ async function checkStaleOrders() {
       cc.forEach(c => { if (c && c !== to) g.ccs.add(c) })
     }
 
-    const vendorItems = vendorStale.map(po => {
+    // POs auto-assigned to ACCOUNTS (unknown/empty BC buyer) are routed silently:
+    // skip escalation entirely for them (no buyer/Pinto/Moorthy/rig-manager emails).
+    // Dashboard stale flags are still recomputed above — only the emails are suppressed.
+    const notAccounts = po => po.buyer_code !== 'ACCOUNTS'
+
+    const vendorItems = vendorStale.filter(notAccounts).map(po => {
       const d = daysSince(po.promised_ready_date)
       return { po, daysLate: d, level: levelForDays(d) }
     })
-    const logisticsItems = logisticsStale.map(po => {
+    const logisticsItems = logisticsStale.filter(notAccounts).map(po => {
       const d = daysSince(po.material_received_date)
       return { po, daysLate: d, level: levelForDays(d) }
     })

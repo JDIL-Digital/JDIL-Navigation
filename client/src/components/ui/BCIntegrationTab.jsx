@@ -17,6 +17,22 @@ async function bcApi(path = '', method = 'GET', body = undefined) {
   return json
 }
 
+// API helper for the /api/admin/bc-integration endpoints (carries .hint on errors).
+async function biApi(path = '', method = 'GET', body = undefined) {
+  const { data: { session } } = await supabase.auth.getSession()
+  const res = await fetch(`/api/admin/bc-integration${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  })
+  const json = await res.json().catch(() => ({}))
+  if (!res.ok) { const e = new Error(json.error || `Request failed (HTTP ${res.status})`); e.hint = json.hint; throw e }
+  return json
+}
+
 const fmtDateTime = d => {
   if (!d) return '—'
   try { return new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) }
@@ -1195,12 +1211,437 @@ function PreviewSyncCard() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  SYNC TO STAGING (Phase 2 — writes to bc_po_staging, NOT po_orders)
+// ═══════════════════════════════════════════════════════════════════════════════
+const RUN_STATUS_BADGE = {
+  running: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400',
+  success: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400',
+  failed:  'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400',
+}
+
+function RecentRunsTable({ runs }) {
+  if (!runs.length) return <p className="text-xs text-gray-400 dark:text-gray-500 p-3">No sync runs yet.</p>
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[520px]">
+        <thead><tr className="border-b border-gray-200 dark:border-gray-800">
+          <th className="table-header">Started</th>
+          <th className="table-header">Rig</th>
+          <th className="table-header">Status</th>
+          <th className="table-header text-center">Rows</th>
+          <th className="table-header">Duration</th>
+        </tr></thead>
+        <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+          {runs.map(run => (
+            <tr key={run.id}>
+              <td className="table-cell text-xs whitespace-nowrap">{fmtDateTime(run.started_at)}</td>
+              <td className="table-cell text-xs">{run.rig_filter || 'All'}</td>
+              <td className="table-cell text-xs"><span className={`rounded-full px-2 py-0.5 ${RUN_STATUS_BADGE[run.status] || ''}`}>{run.status}</span></td>
+              <td className="table-cell text-xs text-center">{run.staging_rows_inserted ?? 0}</td>
+              <td className="table-cell text-xs">{run.processing_time_ms != null ? `${(run.processing_time_ms / 1000).toFixed(1)}s` : '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function SyncToStagingCard({ onViewStaging }) {
+  const [prefix, setPrefix]   = useState('')
+  const [fiscalYears, setFiscalYears] = useState('2627,2728')
+  const [status, setStatus]   = useState('idle')  // idle | loading | success | error
+  const [result, setResult]   = useState(null)
+  const [err, setErr]         = useState(null)
+  const [runs, setRuns]       = useState([])
+  const [historyOpen, setHistoryOpen] = useState(false)
+
+  async function loadRuns() {
+    try { setRuns(await biApi('/sync-runs')) } catch { /* non-critical */ }
+  }
+  useEffect(() => { loadRuns() }, [])
+
+  const loading = status === 'loading'
+  const rigLabel = RIG_PREFIX_OPTIONS.find(o => o.value === prefix)?.label || 'All rigs'
+
+  async function run() {
+    if (!window.confirm('This will fetch BC data and insert rows into the bc_po_staging table. Continue?')) return
+    setStatus('loading'); setResult(null); setErr(null)
+    try {
+      const json = await biApi(`/sync-to-staging?rig_prefix=${encodeURIComponent(prefix)}&fiscal_years=${encodeURIComponent(fiscalYears)}`, 'POST')
+      setResult(json); setStatus('success')
+      await loadRuns()
+    } catch (e) {
+      setErr({ error: e.message, hint: e.hint }); setStatus('error')
+      await loadRuns()
+    }
+  }
+
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-semibold text-[#f57c00] mb-0.5">Sync to Staging (Phase 2 — Testing)</h3>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+        Fetches BC data and writes to the staging table (bc_po_staging). This does NOT touch po_orders. Review staging rows before promoting.
+      </p>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <div>
+          <label className="label">Filter by Rig</label>
+          <select className="input-field w-auto min-w-[220px]" value={prefix} onChange={e => setPrefix(e.target.value)} disabled={loading}>
+            {RIG_PREFIX_OPTIONS.map(o => <option key={o.value || 'all'} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Fiscal Years</label>
+          <select className="input-field w-auto min-w-[220px]" value={fiscalYears} onChange={e => setFiscalYears(e.target.value)} disabled={loading}>
+            {FISCAL_YEAR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+        <button onClick={run} disabled={loading}
+          className="flex items-center gap-2 text-sm text-white px-4 py-2 rounded-lg font-medium bg-[#f57c00] hover:bg-[#d96c00] disabled:opacity-60 disabled:bg-gray-400">
+          {loading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+          {loading ? 'Syncing…' : 'Run Sync to Staging'}
+        </button>
+      </div>
+
+      <div className="mt-4">
+        {loading && (
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+            Syncing to staging for {rigLabel}… (this can take 30–60s)
+          </div>
+        )}
+
+        {status === 'success' && result && (
+          <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg px-4 py-3 space-y-2">
+            <p className="text-sm text-green-700 dark:text-green-400 font-medium">{result.message}</p>
+            <p className="text-xs text-green-700/80 dark:text-green-400/80 font-mono">Sync Run ID: {result.sync_run_id}</p>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              <StatCard label="BOs fetched" value={result.summary.total_bos_fetched} />
+              <StatCard label="POs processed" value={result.summary.total_pos_processed} />
+              <StatCard label="Within range" value={result.summary.pos_within_range} color="green" />
+              <StatCard label="Before cutoff" value={result.summary.pos_before_cutoff} />
+              <StatCard label="Staged rows" value={result.summary.staging_rows_inserted} color="green" />
+            </div>
+            {result.warnings_count > 0 && (
+              <p className="text-xs text-gray-600 dark:text-gray-400">{result.warnings_count} row(s) have warnings (unknown rig / auto-assigned buyer).</p>
+            )}
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => onViewStaging?.(result.sync_run_id)} className="btn-primary text-xs px-3 py-1.5">View Staging Rows</button>
+              <button onClick={() => { setHistoryOpen(true); loadRuns() }} className="btn-secondary text-xs px-3 py-1.5">View Sync History</button>
+            </div>
+          </div>
+        )}
+
+        {status === 'error' && err && (
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-4 py-3">
+            <p className="text-sm text-red-700 dark:text-red-400 font-medium">Sync failed: {err.error}</p>
+            {err.hint && <p className="text-xs text-red-600/80 dark:text-red-400/70 mt-1">{err.hint}</p>}
+          </div>
+        )}
+      </div>
+
+      <Collapsible title={`Recent Sync Runs (${Math.min(runs.length, 5)})`} defaultOpen={false}>
+        <RecentRunsTable runs={runs.slice(0, 5)} />
+      </Collapsible>
+      {historyOpen && runs.length > 5 && (
+        <div className="mt-2 card overflow-hidden"><RecentRunsTable runs={runs} /></div>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SUB-TAB 5 — STAGING ROWS (view only; no promote/delete yet)
+// ═══════════════════════════════════════════════════════════════════════════════
+const PROMO_BADGE = {
+  pending:  'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400',
+  promoted: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400',
+  rejected: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400',
+}
+const PROMO_FILTERS = ['pending', 'promoted', 'rejected', 'all']
+
+// Received-vs-ordered status for a staged line item.
+function receiptStatus(ordered, received) {
+  const o = Number(ordered) || 0, r = Number(received) || 0
+  if (r <= 0)  return { label: 'Not received', cls: 'text-red-700 dark:text-red-400' }
+  if (r >= o)  return { label: 'Fully received', cls: 'text-green-700 dark:text-green-400' }
+  return { label: 'Partial', cls: 'text-amber-700 dark:text-amber-400' }
+}
+
+// Expandable line-items panel for one staging PO (lazy-loads on first open).
+// `plan` (optional) is the preview-promote analysis for this row.
+function LineItemsRow({ row, plan, colSpan }) {
+  const [open, setOpen]       = useState(false)
+  const [items, setItems]     = useState(null)   // null = not loaded
+  const [loading, setLoading] = useState(false)
+  const [error, setError]     = useState('')
+
+  async function toggle() {
+    const next = !open
+    setOpen(next)
+    if (next && items === null) {
+      setLoading(true); setError('')
+      try { setItems(await biApi(`/staging-line-items/${row.id}`)) }
+      catch (e) { setError(e.message); setItems([]) }
+      setLoading(false)
+    }
+  }
+
+  const matchStatus = !plan ? '—'
+    : plan.action === 'INSERT' ? 'New PO'
+    : plan.action === 'UPDATE' ? `Existing PO (${String(plan.existing_po_id || '').slice(0, 8)}…)`
+    : (plan.skip_reason || 'skip')
+
+  return (
+    <>
+      <tr className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+        <td className="table-cell text-xs">
+          <button onClick={toggle} className="text-gray-500 hover:text-jdil-green" title={open ? 'Collapse' : 'Expand line items'}>
+            <span className={`inline-block transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>
+          </button>
+        </td>
+        <td className="table-cell text-xs font-mono">{row.po_number || '—'}</td>
+        <td className="table-cell text-xs">{row.mr_date || '—'}</td>
+        <td className="table-cell text-xs">{row.rig_name || '—'}</td>
+        <td className="table-cell text-xs">{row.vendor_name || '—'}</td>
+        <td className={`table-cell text-xs ${row.buyer_code === 'ACCOUNTS' ? 'text-gray-400 dark:text-gray-500' : ''}`}>
+          {row.buyer_code || '—'}{row.buyer_code_raw && row.buyer_code_raw !== row.buyer_code ? <span className="text-gray-400"> ({row.buyer_code_raw})</span> : ''}
+        </td>
+        <td className="table-cell text-xs">
+          {row.po_status === 'Delivered to Rig'
+            ? <span className="rounded-full px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">{row.po_status}</span>
+            : (row.po_status || '—')}
+        </td>
+        <td className="table-cell text-xs">
+          {plan ? <span className={`rounded-full px-2 py-0.5 ${ACTION_BADGE[plan.action] || ACTION_BADGE.SKIP}`}>{plan.action}</span>
+            : row.sync_action ? <span className={`rounded-full px-2 py-0.5 ${ACTION_BADGE[row.sync_action] || ACTION_BADGE.SKIP}`}>{row.sync_action}</span>
+            : '—'}
+        </td>
+        <td className="table-cell text-xs text-gray-500 dark:text-gray-400">{matchStatus}</td>
+        <td className="table-cell text-xs"><span className={`rounded-full px-2 py-0.5 ${PROMO_BADGE[row.promotion_status] || ''}`}>{row.promotion_status || 'pending'}</span></td>
+        <td className="table-cell text-xs text-gray-500 dark:text-gray-400 max-w-[240px]">
+          {row.quantities_pending_confirmation && (
+            <div><span className="inline-block rounded-full px-2 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 font-medium">⚠️ Confirm quantities</span></div>
+          )}
+          {Array.isArray(row.processed_warnings) && row.processed_warnings.length
+            ? <div title={row.processed_warnings.join('; ')} className={row.quantities_pending_confirmation ? 'mt-0.5' : ''}>{row.processed_warnings.join('; ')}</div>
+            : (row.quantities_pending_confirmation ? null : '—')}
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={colSpan} className="bg-gray-50 dark:bg-gray-900/40 px-6 py-3">
+            {/* Promotion plan detail (if analyzed) */}
+            {plan && plan.action === 'INSERT' && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">No existing match — this PO will be inserted.</p>
+            )}
+            {plan && plan.action === 'SKIP' && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Will skip: {plan.skip_reason || '—'}</p>
+            )}
+            {plan && plan.action === 'UPDATE' && (
+              <div className="mb-3">
+                <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Field changes (purchase-side):</p>
+                {Object.keys(plan.field_changes || {}).length === 0 ? (
+                  <p className="text-xs text-gray-400">No field-level changes (line items differ).</p>
+                ) : (
+                  <table className="text-xs mb-1">
+                    <thead><tr className="text-gray-500 dark:text-gray-400">
+                      <th className="text-left pr-4 font-medium">Field</th><th className="text-left pr-4 font-medium">From</th><th className="text-left font-medium">To</th>
+                    </tr></thead>
+                    <tbody>
+                      {Object.entries(plan.field_changes).map(([f, c]) => (
+                        <tr key={f}>
+                          <td className="pr-4 font-mono">{f}</td>
+                          <td className="pr-4 text-red-600 dark:text-red-400">{String(c.from ?? '—')}</td>
+                          <td className="text-green-600 dark:text-green-400">{String(c.to ?? '—')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+            {loading ? (
+              <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" /> Loading line items…
+              </div>
+            ) : error ? (
+              <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
+            ) : !items || items.length === 0 ? (
+              <p className="text-xs text-gray-400 dark:text-gray-500">No line items staged for this PO.</p>
+            ) : (
+              <table className="w-full text-xs">
+                <thead><tr className="text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                  <th className="text-left py-1.5 pr-3 font-medium">Item Code</th>
+                  <th className="text-left py-1.5 pr-3 font-medium">Description</th>
+                  <th className="text-center py-1.5 px-2 font-medium">Qty Ordered</th>
+                  <th className="text-center py-1.5 px-2 font-medium">Qty Received</th>
+                  <th className="text-center py-1.5 px-2 font-medium">Pending</th>
+                  <th className="text-left py-1.5 px-2 font-medium">UoM</th>
+                  <th className="text-left py-1.5 pl-2 font-medium">Status</th>
+                </tr></thead>
+                <tbody>
+                  {items.map(li => {
+                    const ordered = Number(li.qty_ordered) || 0
+                    const received = Number(li.qty_received) || 0
+                    const pending = Math.max(0, ordered - received)
+                    const st = receiptStatus(ordered, received)
+                    return (
+                      <tr key={li.id} className="border-b border-gray-100 dark:border-gray-800">
+                        <td className="py-1.5 pr-3 font-mono">{li.item_code || '—'}</td>
+                        <td className="py-1.5 pr-3">{li.item_description || '—'}</td>
+                        <td className="py-1.5 px-2 text-center">{ordered}</td>
+                        <td className="py-1.5 px-2 text-center">{received}</td>
+                        <td className="py-1.5 px-2 text-center">{pending}</td>
+                        <td className="py-1.5 px-2">{li.uom || '—'}</td>
+                        <td className={`py-1.5 pl-2 font-medium ${st.cls}`}>{st.label}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+function StagingRowsSub({ initialRunId = '' }) {
+  const [rows, setRows]       = useState([])
+  const [runs, setRuns]       = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState('')
+  const [runFilter, setRunFilter]       = useState(initialRunId)
+  const [statusFilter, setStatusFilter] = useState('pending')
+  const [plan, setPlan]         = useState(null)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [planErr, setPlanErr]   = useState('')
+
+  async function loadRuns() {
+    try { setRuns(await biApi('/sync-runs')) } catch { /* non-critical */ }
+  }
+  async function loadRows() {
+    setLoading(true); setError('')
+    try {
+      const qs = `?status=${encodeURIComponent(statusFilter)}${runFilter ? `&sync_run_id=${encodeURIComponent(runFilter)}` : ''}`
+      const res = await biApi(`/staging-rows${qs}`)
+      setRows(res.rows || [])
+    } catch (e) { setError(e.message) }
+    setLoading(false)
+  }
+  useEffect(() => { loadRuns() }, [])            // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadRows(); setPlan(null); setPlanErr('') }, [runFilter, statusFilter])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function analyze() {
+    if (!runFilter) return
+    setAnalyzing(true); setPlanErr('')
+    try {
+      const res = await biApi(`/preview-promote?sync_run_id=${encodeURIComponent(runFilter)}`, 'POST')
+      setPlan(res)
+      await loadRows()   // refresh to pick up persisted sync_action
+    } catch (e) { setPlanErr(e.message) }
+    setAnalyzing(false)
+  }
+
+  const planById = useMemo(() => new Map((plan?.rows || []).map(r => [r.staging_id, r])), [plan])
+  const planWarnings = plan ? plan.rows.filter(r => Array.isArray(r.warnings) && r.warnings.length).length : 0
+
+  return (
+    <div className="space-y-4">
+      {/* Promotion Plan (dry run) */}
+      <div className="card p-5">
+        <h3 className="text-sm font-semibold text-[#1976d2] mb-0.5">Promotion Plan</h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Analyze what will happen when staging data is promoted to the main po_orders table. This is a dry run — no changes to po_orders.
+        </p>
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400 text-xs rounded-lg px-3 py-2 mb-3">
+          ⚠️ This is a Preview only. The actual Promote feature will be built next session for safety.
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={analyze} disabled={!runFilter || analyzing}
+            className="flex items-center gap-2 text-sm text-white px-4 py-2 rounded-lg font-medium bg-[#1976d2] hover:bg-[#145ea8] disabled:opacity-60 disabled:bg-gray-400">
+            {analyzing && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+            {analyzing ? 'Analyzing…' : 'Analyze Promotion Plan'}
+          </button>
+          {!runFilter && <span className="text-xs text-gray-400 dark:text-gray-500">Select a Sync Run below to analyze.</span>}
+        </div>
+        {planErr && <p className="text-xs text-red-600 dark:text-red-400 mt-2">{planErr}</p>}
+        {plan && (
+          <div className="mt-3 space-y-2">
+            <div className="grid grid-cols-3 gap-2">
+              <StatCard label="Will INSERT" value={plan.summary.will_insert} color="green" />
+              <StatCard label="Will UPDATE" value={plan.summary.will_update} />
+              <StatCard label="Will SKIP" value={plan.summary.will_skip} />
+            </div>
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              Inserts with GRN: {plan.summary.inserts_with_grn} · Updates with GRN: {plan.summary.updates_with_grn} · Rows with warnings: {planWarnings}
+            </p>
+            <button disabled title="Promotion execution not yet implemented - use Preview to analyze"
+              className="text-sm text-white px-4 py-2 rounded-lg font-medium bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed">
+              Promote to po_orders
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-end gap-2 flex-wrap">
+        <div>
+          <label className="label">Sync Run</label>
+          <select className="input-field w-auto min-w-[260px]" value={runFilter} onChange={e => setRunFilter(e.target.value)}>
+            <option value="">All runs</option>
+            {runs.map(r => (
+              <option key={r.id} value={r.id}>{fmtDateTime(r.started_at)} · {r.rig_filter || 'All'} · {r.staging_rows_inserted ?? 0} rows</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label">Promotion Status</label>
+          <select className="input-field w-auto min-w-[150px]" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+            {PROMO_FILTERS.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        <p className="text-xs text-gray-400 dark:text-gray-500 ml-auto self-center">{loading ? 'Loading…' : `${rows.length} row${rows.length !== 1 ? 's' : ''}`}</p>
+      </div>
+      <ErrorBanner error={error} onRetry={loadRows} />
+      {loading ? <Spinner /> : rows.length === 0 ? (
+        <p className="text-center py-12 text-sm text-gray-400">No staging rows for this filter. Run a "Sync to Staging" above to populate.</p>
+      ) : (
+        <div className="card overflow-hidden"><div className="overflow-x-auto">
+          <table className="w-full min-w-[1140px]">
+            <thead><tr className="border-b border-gray-200 dark:border-gray-800">
+              <th className="table-header w-8"></th>
+              <th className="table-header">PO Number</th>
+              <th className="table-header">MR Date</th>
+              <th className="table-header">Rig</th>
+              <th className="table-header">Vendor</th>
+              <th className="table-header">Buyer</th>
+              <th className="table-header">PO Status</th>
+              <th className="table-header">Planned Action</th>
+              <th className="table-header">Match Status</th>
+              <th className="table-header">Promotion</th>
+              <th className="table-header">Warnings</th>
+            </tr></thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {rows.map(r => <LineItemsRow key={r.id} row={r} plan={planById.get(r.id)} colSpan={11} />)}
+            </tbody>
+          </table>
+        </div></div>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  MAIN — BC INTEGRATION TAB
 // ═══════════════════════════════════════════════════════════════════════════════
-const SUB_TABS = ['Rig Mapping', 'Buyer Mapping', 'Buyer Aliases', 'Data Quality Alerts']
+const SUB_TABS = ['Rig Mapping', 'Buyer Mapping', 'Buyer Aliases', 'Data Quality Alerts', 'Staging Rows']
 
 export default function BCIntegrationTab() {
   const [sub, setSub] = useState(0)
+  const [stagingRunId, setStagingRunId] = useState('')
   return (
     <div className="space-y-4">
       {/* Connection test (above the sub-tabs) */}
@@ -1211,6 +1652,9 @@ export default function BCIntegrationTab() {
 
       {/* Preview sync dry-run (below data fetch, above the sub-tabs) */}
       <PreviewSyncCard />
+
+      {/* Sync to staging (writes to bc_po_staging, above the sub-tabs) */}
+      <SyncToStagingCard onViewStaging={id => { setStagingRunId(id); setSub(4) }} />
 
       {/* Sub-tab bar */}
       <div className="flex gap-1 border-b border-gray-200 dark:border-gray-800 overflow-x-auto scrollbar-none">
@@ -1227,6 +1671,7 @@ export default function BCIntegrationTab() {
       {sub === 1 && <BuyerMappingSub />}
       {sub === 2 && <AliasesSub />}
       {sub === 3 && <AlertsSub />}
+      {sub === 4 && <StagingRowsSub initialRunId={stagingRunId} />}
     </div>
   )
 }

@@ -17,25 +17,38 @@ const {
   isWithinSyncRange,
 } = require('./bcTransform')
 
-// Flatten Level-4/5 receiptHeaders → receiptLines into JDIL line-item shape.
-// NOTE: BC receipt-line field names are best-effort guesses until verified
-// against real JSON — adjust the fallbacks once a sample is available.
-function extractLineItems(receiptHeaders) {
-  if (!Array.isArray(receiptHeaders)) return []
-  const items = []
-  for (const h of receiptHeaders) {
-    const lines = Array.isArray(h.receiptLines) ? h.receiptLines : []
-    for (const rl of lines) {
-      items.push({
-        item_code:    rl.itemNo ?? rl.ItemNo ?? rl.no ?? null,
-        description:  rl.description ?? rl.Desc1 ?? rl.itemDescription ?? null,
-        qty_ordered:  rl.orderQuantity ?? rl.quantityOrdered ?? rl.qtyOrdered ?? null,
-        qty_received: rl.quantity ?? rl.Quantity ?? rl.qtyReceived ?? rl.receivedQuantity ?? null,
-        uom:          rl.unitOfMeasureCode ?? rl.unitOfMeasure ?? rl.uom ?? rl.UOM ?? null,
-      })
+// Build line items for one PO: ordered quantities come from the parent Level-2
+// blanketLine(s); received quantities are summed from the PO's Level-5
+// receiptLines, matched by item code.
+// NOTE: BC field names are best-effort guesses until verified against real JSON
+// — adjust the fallbacks once a sample is available.
+function extractLineItems(blanketLine, po) {
+  if (!blanketLine) return []
+
+  // Sum received qty per item code across this PO's receipt lines.
+  const receivedByItem = {}
+  for (const h of (Array.isArray(po?.receiptHeaders) ? po.receiptHeaders : [])) {
+    for (const rl of (Array.isArray(h.receiptLines) ? h.receiptLines : [])) {
+      const code = rl.itemNo ?? rl.ItemNo ?? rl.no ?? null
+      const rq   = Number(rl.quantity ?? rl.receivedQuantity ?? rl.qtyReceived ?? rl.Quantity ?? 0) || 0
+      if (code != null) receivedByItem[code] = (receivedByItem[code] || 0) + rq
     }
   }
-  return items
+
+  // Ordered items: the blanketLine itself, or a nested sub-line array if present.
+  const orderedLines = Array.isArray(blanketLine.lines) ? blanketLine.lines : [blanketLine]
+  return orderedLines.map(l => {
+    const item_code = l.itemNo ?? l.ItemNo ?? l.no ?? null
+    return {
+      item_code,
+      item_description: l.description ?? l.itemDescription ?? l.Desc1 ?? null,
+      qty_ordered:      l.quantity ?? l.qty ?? l.orderQuantity ?? null,
+      qty_received:     item_code != null && receivedByItem[item_code] != null ? receivedByItem[item_code] : 0,
+      uom:              l.unitOfMeasureCode ?? l.unitOfMeasure ?? l.uom ?? l.UOM ?? null,
+      bc_line_no:       l.lineNo ?? l.lineNumber ?? l.bcLineNo ?? null,
+      bc_blanket_line_id: l.id ?? blanketLine.id ?? null,
+    }
+  })
 }
 
 // Log an unresolved unknown-buyer alert, grouped by bc_value (increments the
@@ -125,7 +138,15 @@ async function processSingleBlanketOrder(bcBO, supabaseAdmin) {
 
       const transformed_data = transformLinkedOrder(po, bcBO, { rigName: rig_name, buyerLookupResult: buyer_lookup })
       const gran_data = processReceiptHeaders(po.receiptHeaders)
-      const line_items = extractLineItems(po.receiptHeaders)
+      const line_items = extractLineItems(line, po)   // ordered (Level 2) × received (Level 5)
+
+      // Auto-set status: Cancelled wins; a GRN means goods were received →
+      // 'Delivered to Rig'. Whenever a GRN exists the rig team still needs to
+      // confirm actual quantities, so flag it as pending confirmation.
+      const rawStatus = String(po.poStatus ?? '').trim()
+      if (rawStatus.toLowerCase() === 'cancelled') transformed_data.po_status = 'Cancelled'
+      else if (gran_data.grn_number) transformed_data.po_status = 'Delivered to Rig'
+      const quantities_pending_confirmation = !!gran_data.grn_number && transformed_data.po_status !== 'Cancelled'
 
       pos_processed.push({
         po_number:      po.documentNo,
@@ -133,6 +154,7 @@ async function processSingleBlanketOrder(bcBO, supabaseAdmin) {
         buyer_lookup,
         gran_data,
         line_items,
+        quantities_pending_confirmation,
         action_needed:  'INSERT',   // placeholder — INSERT/UPDATE/SKIP logic added next phase
         skip_reason:    null,
       })
