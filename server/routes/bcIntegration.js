@@ -487,6 +487,140 @@ router.get('/staging-rows', async (req, res) => {
   res.json({ rows: data || [], total: (data || []).length, sync_run_info })
 })
 
+// ─── POST /api/admin/bc-integration/promote-to-po-orders ──────────────────────
+//   ?sync_run_id=X&batch_size=10&dry_run=true
+// Promotes pending INSERT staging rows into po_orders (+ po_line_items).
+// Safety: batch-limited, supports dry_run, per-PO compensation on failure.
+// Handles sync_action='INSERT' only (UPDATE comes later).
+router.post('/promote-to-po-orders', async (req, res) => {
+  const sync_run_id = String(req.query.sync_run_id || '').trim()
+  if (!sync_run_id) return res.status(400).json({ error: 'sync_run_id is required.' })
+  const batch_size = Math.min(Math.max(parseInt(req.query.batch_size, 10) || 10, 1), 1000)
+  const dry_run = req.query.dry_run === 'true'
+  const now = () => new Date().toISOString()
+
+  const dateOrNull = v => (v ? String(v) : null)
+
+  try {
+    const { data: staging, error } = await supabase
+      .from('bc_po_staging').select('*')
+      .eq('sync_run_id', sync_run_id).eq('promotion_status', 'pending').eq('sync_action', 'INSERT')
+      .order('created_at', { ascending: true })
+      .limit(batch_size)
+    if (error) throw new Error(error.message)
+
+    // Pre-fetch line items for the batch.
+    const liByStaging = new Map()
+    const ids = staging.map(s => s.id)
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data: lis } = await supabase.from('bc_po_line_items_staging').select('*').in('bc_staging_id', ids.slice(i, i + 200)).order('bc_line_no', { ascending: true })
+      for (const li of lis || []) { const a = liByStaging.get(li.bc_staging_id) || []; a.push(li); liByStaging.set(li.bc_staging_id, a) }
+    }
+
+    const details = []
+    let pos_promoted = 0, pos_failed = 0, pos_skipped = 0, line_items_promoted = 0
+    const seenPoNumbers = new Set()   // catches in-batch duplicates too
+
+    for (const s of staging) {
+      const stagingLis = (liByStaging.get(s.id) || []).filter(li => li.item_code)  // item_name NOT NULL
+
+      // Duplicate check: skip if this po_number already exists in po_orders, or
+      // already appeared earlier in this batch.
+      let alreadyExists = seenPoNumbers.has(s.po_number)
+      if (!alreadyExists) {
+        const { data: dup } = await supabase.from('po_orders').select('id').eq('po_number', s.po_number).limit(1)
+        alreadyExists = !!(dup && dup.length)
+      }
+      if (alreadyExists) {
+        pos_skipped++
+        if (!dry_run) await supabase.from('bc_po_staging').update({ promotion_status: 'skipped', promotion_notes: 'already_in_po_orders' }).eq('id', s.id)
+        details.push({ po_number: s.po_number, status: dry_run ? 'would_skip' : 'skipped', new_po_id: null, reason: 'already_in_po_orders' })
+        continue
+      }
+      seenPoNumbers.add(s.po_number)
+
+      if (dry_run) {
+        details.push({ po_number: s.po_number, status: 'would_promote', new_po_id: null, line_items: stagingLis.length })
+        pos_promoted++; line_items_promoted += stagingLis.length
+        continue
+      }
+
+      // 1. Insert the PO.
+      const poRow = {
+        mr_number: s.mr_number, po_number: s.po_number, mr_description: s.mr_description,
+        mr_date: dateOrNull(s.mr_date), rig_name: s.rig_name, office_location: s.office_location,
+        vendor_code: s.vendor_code, vendor_name: s.vendor_name,
+        material_description: s.material_description, material_description_2: s.material_description_2,
+        po_date: dateOrNull(s.po_date), status: s.po_status, buyer_code: s.buyer_code,
+        grn_number: s.grn_number, delivered_to_rig_date: dateOrNull(s.gran_date),
+        quantities_pending_confirmation: s.quantities_pending_confirmation,
+        bc_blanket_order_id: s.bc_blanket_order_id, bc_linked_order_id: s.bc_linked_order_id,
+        bc_source: true, bc_last_synced: now(), created_by: req.user.id, updated_at: now(),
+      }
+      const { data: newPo, error: poErr } = await supabase.from('po_orders').insert(poRow).select('id').single()
+      if (poErr) {
+        pos_failed++
+        await supabase.from('bc_po_staging').update({ promotion_status: 'failed', promotion_notes: `PO insert: ${poErr.message}` }).eq('id', s.id)
+        details.push({ po_number: s.po_number, status: 'failed', new_po_id: null, error: poErr.message })
+        continue
+      }
+      const poId = newPo.id
+
+      // 2. Insert line items (generated columns quantity_pending/item_status are skipped).
+      if (stagingLis.length) {
+        const liRows = stagingLis.map(li => ({
+          po_id: poId,
+          item_name: li.item_code,
+          material_description: li.item_description ?? null,
+          unit: li.uom ?? null,
+          quantity_ordered: li.qty_ordered ?? 0,
+          quantity_delivered: li.qty_received ?? 0,
+        }))
+        const { data: insertedLis, error: liErr } = await supabase.from('po_line_items').insert(liRows).select('id')
+        if (liErr) {
+          // Compensate: remove the PO just inserted (cascades any line items).
+          await supabase.from('po_orders').delete().eq('id', poId)
+          pos_failed++
+          await supabase.from('bc_po_staging').update({ promotion_status: 'failed', promotion_notes: `Line item insert: ${liErr.message}` }).eq('id', s.id)
+          details.push({ po_number: s.po_number, status: 'failed', new_po_id: null, error: liErr.message })
+          continue
+        }
+        line_items_promoted += insertedLis.length
+        // Mark staged line items promoted, linking to their new ids (by order).
+        for (let k = 0; k < stagingLis.length; k++) {
+          await supabase.from('bc_po_line_items_staging')
+            .update({ promotion_status: 'promoted', promoted_at: now(), promoted_line_item_id: insertedLis[k]?.id ?? null })
+            .eq('id', stagingLis[k].id)
+        }
+      }
+
+      // 3. Mark the staging PO promoted.
+      await supabase.from('bc_po_staging')
+        .update({ promotion_status: 'promoted', promoted_at: now(), promoted_po_id: poId })
+        .eq('id', s.id)
+      pos_promoted++
+      details.push({ po_number: s.po_number, status: 'promoted', new_po_id: poId })
+    }
+
+    // Remaining pending INSERT rows for this run.
+    const { count: remaining } = await supabase
+      .from('bc_po_staging').select('id', { count: 'exact', head: true })
+      .eq('sync_run_id', sync_run_id).eq('promotion_status', 'pending').eq('sync_action', 'INSERT')
+
+    res.json({
+      success: true,
+      dry_run,
+      batch_size_requested: batch_size,
+      pos_promoted, pos_failed, pos_skipped, line_items_promoted,
+      details,
+      remaining_pending: remaining ?? 0,
+    })
+  } catch (e) {
+    console.error('[bc-promote] FAILED:', e.message)
+    res.status(500).json({ success: false, error: e.message, hint: 'Ensure v27 columns exist on po_orders and staging tables are populated.' })
+  }
+})
+
 // ─── GET /api/admin/bc-integration/staging-line-items/:bc_staging_id ──────────
 router.get('/staging-line-items/:bc_staging_id', async (req, res) => {
   const { data, error } = await supabase

@@ -1358,6 +1358,7 @@ const PROMO_BADGE = {
   pending:  'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400',
   promoted: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400',
   rejected: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400',
+  failed:   'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400',
 }
 const PROMO_FILTERS = ['pending', 'promoted', 'rejected', 'all']
 
@@ -1419,7 +1420,14 @@ function LineItemsRow({ row, plan, colSpan }) {
             : '—'}
         </td>
         <td className="table-cell text-xs text-gray-500 dark:text-gray-400">{matchStatus}</td>
-        <td className="table-cell text-xs"><span className={`rounded-full px-2 py-0.5 ${PROMO_BADGE[row.promotion_status] || ''}`}>{row.promotion_status || 'pending'}</span></td>
+        <td className="table-cell text-xs">
+          <span className={`rounded-full px-2 py-0.5 ${PROMO_BADGE[row.promotion_status] || ''}`} title={row.promotion_status === 'failed' ? (row.promotion_notes || '') : ''}>
+            {row.promotion_status || 'pending'}
+          </span>
+          {row.promotion_status === 'promoted' && row.promoted_po_id && (
+            <span className="block text-[10px] text-gray-400 font-mono mt-0.5">{String(row.promoted_po_id).slice(0, 8)}…</span>
+          )}
+        </td>
         <td className="table-cell text-xs text-gray-500 dark:text-gray-400 max-w-[240px]">
           {row.quantities_pending_confirmation && (
             <div><span className="inline-block rounded-full px-2 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 font-medium">⚠️ Confirm quantities</span></div>
@@ -1519,6 +1527,11 @@ function StagingRowsSub({ initialRunId = '' }) {
   const [plan, setPlan]         = useState(null)
   const [analyzing, setAnalyzing] = useState(false)
   const [planErr, setPlanErr]   = useState('')
+  const [batchSize, setBatchSize] = useState('10')
+  const [dryRun, setDryRun]       = useState(true)
+  const [promoting, setPromoting] = useState(false)
+  const [promoteResult, setPromoteResult] = useState(null)
+  const [promoteErr, setPromoteErr]       = useState('')
 
   async function loadRuns() {
     try { setRuns(await biApi('/sync-runs')) } catch { /* non-critical */ }
@@ -1549,16 +1562,33 @@ function StagingRowsSub({ initialRunId = '' }) {
   const planById = useMemo(() => new Map((plan?.rows || []).map(r => [r.staging_id, r])), [plan])
   const planWarnings = plan ? plan.rows.filter(r => Array.isArray(r.warnings) && r.warnings.length).length : 0
 
+  async function promote() {
+    if (!runFilter) return
+    const n = batchSize === 'all' ? 'all remaining' : batchSize
+    const msg = dryRun
+      ? `Dry run: analyze promoting ${n} POs. No data will be written. Continue?`
+      : `You are about to promote ${n} POs to the production po_orders table. This action is IRREVERSIBLE (except via Supabase backup restore). Continue?`
+    if (!window.confirm(msg)) return
+    setPromoting(true); setPromoteErr(''); setPromoteResult(null)
+    try {
+      const bs = batchSize === 'all' ? 1000 : batchSize
+      const res = await biApi(`/promote-to-po-orders?sync_run_id=${encodeURIComponent(runFilter)}&batch_size=${bs}&dry_run=${dryRun}`, 'POST')
+      setPromoteResult(res)
+      await loadRows()
+    } catch (e) { setPromoteErr(e.message) }
+    setPromoting(false)
+  }
+
   return (
     <div className="space-y-4">
       {/* Promotion Plan (dry run) */}
       <div className="card p-5">
         <h3 className="text-sm font-semibold text-[#1976d2] mb-0.5">Promotion Plan</h3>
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-          Analyze what will happen when staging data is promoted to the main po_orders table. This is a dry run — no changes to po_orders.
+          Analyze what will happen when staging data is promoted to the main po_orders table, then execute in safe batches.
         </p>
-        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400 text-xs rounded-lg px-3 py-2 mb-3">
-          ⚠️ This is a Preview only. The actual Promote feature will be built next session for safety.
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-xs font-medium rounded-lg px-3 py-2 mb-3">
+          ⚠️ PRODUCTION WRITE — the Execute Promotion section below writes to po_orders. Proceed with caution; use Dry Run first.
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={analyze} disabled={!runFilter || analyzing}
@@ -1579,12 +1609,62 @@ function StagingRowsSub({ initialRunId = '' }) {
             <p className="text-xs text-gray-600 dark:text-gray-400">
               Inserts with GRN: {plan.summary.inserts_with_grn} · Updates with GRN: {plan.summary.updates_with_grn} · Rows with warnings: {planWarnings}
             </p>
-            <button disabled title="Promotion execution not yet implemented - use Preview to analyze"
-              className="text-sm text-white px-4 py-2 rounded-lg font-medium bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed">
-              Promote to po_orders
-            </button>
           </div>
         )}
+
+        {/* Execute Promotion */}
+        <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800">
+          <h4 className="text-sm font-semibold text-red-600 dark:text-red-400 mb-2">Execute Promotion</h4>
+          <div className="flex items-end gap-3 flex-wrap">
+            <div>
+              <label className="label">Batch Size</label>
+              <select className="input-field w-auto min-w-[120px]" value={batchSize} onChange={e => setBatchSize(e.target.value)} disabled={promoting}>
+                {['1', '5', '10', '25', '50', 'all'].map(b => <option key={b} value={b}>{b === 'all' ? 'All remaining' : b}</option>)}
+              </select>
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-700 dark:text-gray-300 pb-2">
+              <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} className="accent-jdil-green w-4 h-4" disabled={promoting} />
+              Dry Run (no writes)
+            </label>
+            <button onClick={promote} disabled={!runFilter || promoting}
+              className="flex items-center gap-2 text-sm text-white px-4 py-2 rounded-lg font-medium bg-red-600 hover:bg-red-700 disabled:opacity-60 disabled:bg-gray-400">
+              {promoting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+              {promoting ? 'Promoting…' : (dryRun ? 'Promote Batch (Dry Run)' : 'Promote Batch')}
+            </button>
+            {!runFilter && <span className="text-xs text-gray-400 dark:text-gray-500 pb-2">Select a Sync Run below first.</span>}
+          </div>
+
+          {promoteErr && <p className="text-xs text-red-600 dark:text-red-400 mt-2">{promoteErr}</p>}
+
+          {promoteResult && (
+            <div className={`mt-3 rounded-lg px-4 py-3 border ${promoteResult.dry_run
+              ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
+              : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'}`}>
+              <p className={`text-sm font-medium ${promoteResult.dry_run ? 'text-blue-700 dark:text-blue-400' : 'text-green-700 dark:text-green-400'}`}>
+                {promoteResult.dry_run
+                  ? `Dry run: ${promoteResult.pos_promoted} PO(s) would be promoted, ${promoteResult.line_items_promoted} line item(s) created.`
+                  : `${promoteResult.pos_promoted} PO(s) promoted, ${promoteResult.line_items_promoted} line item(s) created.`}
+                {promoteResult.pos_failed > 0 && <span className="text-red-600 dark:text-red-400"> · {promoteResult.pos_failed} failed</span>}
+              </p>
+              <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">Remaining pending INSERTs: {promoteResult.remaining_pending}</p>
+              <div className="flex gap-2 mt-2">
+                {!promoteResult.dry_run && promoteResult.remaining_pending > 0 && (
+                  <button onClick={promote} disabled={promoting} className="btn-primary text-xs px-3 py-1.5">Promote Next Batch</button>
+                )}
+                <button onClick={loadRows} className="btn-secondary text-xs px-3 py-1.5">Refresh Rows</button>
+              </div>
+              {Array.isArray(promoteResult.details) && promoteResult.details.some(d => d.status === 'failed') && (
+                <Collapsible title={`Failures (${promoteResult.details.filter(d => d.status === 'failed').length})`}>
+                  <div className="p-2 text-xs space-y-1">
+                    {promoteResult.details.filter(d => d.status === 'failed').map((d, i) => (
+                      <div key={i} className="text-red-600 dark:text-red-400"><span className="font-mono">{d.po_number}</span>: {d.error}</div>
+                    ))}
+                  </div>
+                </Collapsible>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex items-end gap-2 flex-wrap">
