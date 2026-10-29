@@ -207,4 +207,18 @@ process.on('uncaughtException', err => {
 
 app.listen(PORT, () => {
   console.log(`JDIL Navigation server running on port ${PORT} [${IS_PROD ? 'production' : 'development'}]`)
+
+  // ── BC automated sync scheduler (9am + 6pm IST) ─────────────────────────────
+  // Only register the schedule in production, or when explicitly enabled for
+  // local testing via BC_CRON_ENABLE=true. Promotion to po_orders is separately
+  // gated behind BC_SYNC_ENABLED (default off).
+  if (IS_PROD || process.env.BC_CRON_ENABLE === 'true') {
+    try {
+      require('./utils/bcCronScheduler').initializeScheduler()
+    } catch (e) {
+      console.error('[cron] failed to initialize BC sync scheduler:', e.message)
+    }
+  } else {
+    console.log('[cron] BC sync scheduler NOT started (set BC_CRON_ENABLE=true to enable locally)')
+  }
 })

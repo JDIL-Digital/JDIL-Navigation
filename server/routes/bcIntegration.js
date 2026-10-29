@@ -3,7 +3,8 @@ const { requireAuth } = require('../middleware/authMiddleware')
 const { getBCAccessToken } = require('../utils/bcAuth')
 const { supabase } = require('../utils/supabaseAdmin')
 const { previewSync } = require('../utils/bcSyncProcessor')
-const { isWithinSyncRange } = require('../utils/bcTransform')
+const { stageRig, promoteRun } = require('../utils/bcSyncService')
+const { getSchedulerStatus, runFullSync } = require('../utils/bcCronScheduler')
 
 // Admin-only.
 router.use(requireAuth)
@@ -319,7 +320,6 @@ router.post('/sync-to-staging', async (req, res) => {
   const rig_prefix = String(req.query.rig_prefix || '').trim().replace(/[^A-Za-z0-9]/g, '')
   const fiscal_years = String(req.query.fiscal_years || '2627,2728')
     .split(',').map(s => s.trim().replace(/[^0-9]/g, '')).filter(Boolean)
-  const { BC_TENANT_ID, BC_ENVIRONMENT, BC_COMPANY_ID } = process.env
 
   // Open a sync-run log row up front so failures are recorded too.
   const { data: run, error: runErr } = await supabase
@@ -331,132 +331,27 @@ router.post('/sync-to-staging', async (req, res) => {
   const started = Date.now()
 
   try {
-    if (!BC_TENANT_ID || !BC_ENVIRONMENT || !BC_COMPANY_ID) {
-      throw Object.assign(new Error('BC data-fetch not configured in .env'), { hint: 'Set BC_TENANT_ID, BC_ENVIRONMENT and BC_COMPANY_ID in server/.env, then restart.' })
-    }
-
-    const { access_token } = await getBCAccessToken()
-    const base   = `https://api.businesscentral.dynamics.com/v2.0/${encodeURIComponent(BC_TENANT_ID)}/${encodeURIComponent(BC_ENVIRONMENT)}/api/TCPL/Procurement/v2.0/companies(${BC_COMPANY_ID})/blanketOrdersnew`
-    const expand = '$expand=blanketLines($expand=linkedOrders($expand=receiptHeaders($expand=receiptLines)))'
-    let filter = ''
-    if (rig_prefix && fiscal_years.length) {
-      filter = `&$filter=${fiscal_years.map(fy => `startswith(documentNo,'${rig_prefix}/BO/${fy}')`).join(' or ')}`
-    } else if (rig_prefix) {
-      filter = `&$filter=startswith(documentNo,'${rig_prefix}/')`
-    }
-    const url = `${base}?$top=100&$orderby=documentNo desc&${expand}${filter}`
-    console.log(`[bc-staging] run ${runId} GET ${url}`)
-
-    const r = await fetch(url, { headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' } })
-    const text = await r.text()
-    let data = null
-    try { data = JSON.parse(text) } catch { /* non-JSON */ }
-    if (!r.ok) {
-      throw Object.assign(new Error(data?.error?.message || `BC API returned HTTP ${r.status}`), { hint: 'Check BC_ENVIRONMENT, BC_COMPANY_ID and app permissions.' })
-    }
-
-    const preview = await previewSync(data, supabase)
-
-    // Build staging PO records (each with its line items) for within-range POs.
-    const poRecords = []   // [{ row, lineItems }]
-    let within = 0, before = 0, skippedLineItems = 0
-    for (const bo of preview.blanket_orders) {
-      for (const po of bo.pos_processed) {
-        const td = po.transformed_data
-        if (!isWithinSyncRange(td.mr_date)) { before++; continue }
-        within++
-        if (!td.po_number) continue   // po_number is NOT NULL in staging — skip if absent
-
-        const qtyPending = po.quantities_pending_confirmation ?? !!(po.gran_data?.grn_number)
-
-        const warnings = []
-        if (!bo.rig_matched) warnings.push(`unknown rig: ${bo.rig_prefix || '(none)'}`)
-        if (po.buyer_lookup?.auto_assigned_to_accounts) {
-          warnings.push(`buyer auto-assigned to ACCOUNTS${po.buyer_lookup.bc_value ? ` (${po.buyer_lookup.bc_value})` : ' (empty)'}`)
-        }
-        if (qtyPending) warnings.push('⚠️ GRN received - rig team needs to confirm quantities')
-
-        const row = {
-          mr_number: td.mr_number, mr_description: td.mr_description, mr_date: td.mr_date,
-          rig_name: td.rig_name, office_location: td.office_location,
-          po_number: td.po_number, vendor_code: td.vendor_code, vendor_name: td.vendor_name,
-          material_description: td.material_description, material_description_2: td.material_description_2,
-          po_date: td.po_date, po_status: td.po_status,
-          buyer_code: td.buyer_code, buyer_code_raw: td.buyer_code_raw,
-          grn_number: po.gran_data?.grn_number ?? null, gran_date: po.gran_data?.gran_date ?? null,
-          bc_blanket_order_id: td.bc_blanket_order_id, bc_linked_order_id: td.bc_linked_order_id,
-          sync_run_id: runId,
-          sync_action: po.action_needed || 'INSERT',
-          promotion_status: 'pending',
-          quantities_pending_confirmation: qtyPending,
-          processed_warnings: warnings.length ? warnings : null,
-        }
-        // Skip line items lacking an item code or ordered qty.
-        const lineItems = (po.line_items || []).filter(li => {
-          const ok = li.item_code && li.qty_ordered != null
-          if (!ok) skippedLineItems++
-          return ok
-        })
-        poRecords.push({ row, lineItems })
-      }
-    }
-
-    // Insert PO rows (capturing ids), then their line items. PostgREST returns
-    // inserted rows in input order, so we zip by index within each chunk.
-    let lineItemsStaged = 0
-    for (let i = 0; i < poRecords.length; i += 500) {
-      const chunk = poRecords.slice(i, i + 500)
-      const { data: inserted, error: insErr } = await supabase
-        .from('bc_po_staging').insert(chunk.map(rec => rec.row)).select('id')
-      if (insErr) throw new Error(`Staging insert failed: ${insErr.message}`)
-
-      const liRows = []
-      inserted.forEach((ins, idx) => {
-        const rec = chunk[idx]
-        for (const li of rec.lineItems) {
-          const n = Number(li.bc_line_no)
-          liRows.push({
-            bc_staging_id:      ins.id,
-            po_number:          rec.row.po_number,
-            bc_line_no:         Number.isFinite(n) ? n : null,
-            item_code:          li.item_code,
-            item_description:   li.item_description ?? null,
-            qty_ordered:        li.qty_ordered ?? null,
-            qty_received:       li.qty_received ?? 0,
-            uom:                li.uom ?? null,
-            bc_blanket_line_id: li.bc_blanket_line_id ?? null,
-          })
-        }
-      })
-      for (let j = 0; j < liRows.length; j += 500) {
-        const { error: liErr } = await supabase.from('bc_po_line_items_staging').insert(liRows.slice(j, j + 500))
-        if (liErr) throw new Error(`Line item insert failed: ${liErr.message}`)
-      }
-      lineItemsStaged += liRows.length
-    }
-
-    const stagingCount = poRecords.length
-    if (skippedLineItems) console.warn(`[bc-staging] run ${runId}: skipped ${skippedLineItems} line item(s) missing item_code/qty_ordered`)
+    // Shared fetch → process → stage logic (also used by the cron scheduler).
+    const s = await stageRig({ rig_prefix, fiscal_years, runId, label: `run ${runId}` })
     const processing_time_ms = Date.now() - started
-    const warnings_count = poRecords.filter(rec => rec.row.processed_warnings).length
 
     await supabase.from('bc_sync_runs').update({
       status: 'success', completed_at: new Date().toISOString(),
-      total_bos_fetched: preview.total_bos, total_pos_processed: preview.total_pos,
-      pos_within_range: within, pos_before_cutoff: before,
-      staging_rows_inserted: stagingCount, processing_time_ms,
+      total_bos_fetched: s.total_bos, total_pos_processed: s.total_pos,
+      pos_within_range: s.within, pos_before_cutoff: s.before,
+      staging_rows_inserted: s.staging_rows, processing_time_ms,
     }).eq('id', runId)
 
     res.json({
       success: true,
       sync_run_id: runId,
       summary: {
-        total_bos_fetched: preview.total_bos, total_pos_processed: preview.total_pos,
-        pos_within_range: within, pos_before_cutoff: before,
-        staging_rows_inserted: stagingCount, line_items_staged: lineItemsStaged, processing_time_ms,
+        total_bos_fetched: s.total_bos, total_pos_processed: s.total_pos,
+        pos_within_range: s.within, pos_before_cutoff: s.before,
+        staging_rows_inserted: s.staging_rows, line_items_staged: s.line_items, processing_time_ms,
       },
-      warnings_count,
-      message: `${stagingCount} PO${stagingCount !== 1 ? 's' : ''} and ${lineItemsStaged} line item${lineItemsStaged !== 1 ? 's' : ''} inserted into staging. Review and promote when ready.`,
+      warnings_count: s.warnings_count,
+      message: `${s.staging_rows} PO${s.staging_rows !== 1 ? 's' : ''} and ${s.line_items} line item${s.line_items !== 1 ? 's' : ''} inserted into staging. Review and promote when ready.`,
     })
   } catch (e) {
     console.error(`[bc-staging] run ${runId} FAILED:`, e.message)
@@ -497,124 +392,11 @@ router.post('/promote-to-po-orders', async (req, res) => {
   if (!sync_run_id) return res.status(400).json({ error: 'sync_run_id is required.' })
   const batch_size = Math.min(Math.max(parseInt(req.query.batch_size, 10) || 10, 1), 1000)
   const dry_run = req.query.dry_run === 'true'
-  const now = () => new Date().toISOString()
-
-  const dateOrNull = v => (v ? String(v) : null)
 
   try {
-    const { data: staging, error } = await supabase
-      .from('bc_po_staging').select('*')
-      .eq('sync_run_id', sync_run_id).eq('promotion_status', 'pending').eq('sync_action', 'INSERT')
-      .order('created_at', { ascending: true })
-      .limit(batch_size)
-    if (error) throw new Error(error.message)
-
-    // Pre-fetch line items for the batch.
-    const liByStaging = new Map()
-    const ids = staging.map(s => s.id)
-    for (let i = 0; i < ids.length; i += 200) {
-      const { data: lis } = await supabase.from('bc_po_line_items_staging').select('*').in('bc_staging_id', ids.slice(i, i + 200)).order('bc_line_no', { ascending: true })
-      for (const li of lis || []) { const a = liByStaging.get(li.bc_staging_id) || []; a.push(li); liByStaging.set(li.bc_staging_id, a) }
-    }
-
-    const details = []
-    let pos_promoted = 0, pos_failed = 0, pos_skipped = 0, line_items_promoted = 0
-    const seenPoNumbers = new Set()   // catches in-batch duplicates too
-
-    for (const s of staging) {
-      const stagingLis = (liByStaging.get(s.id) || []).filter(li => li.item_code)  // item_name NOT NULL
-
-      // Duplicate check: skip if this po_number already exists in po_orders, or
-      // already appeared earlier in this batch.
-      let alreadyExists = seenPoNumbers.has(s.po_number)
-      if (!alreadyExists) {
-        const { data: dup } = await supabase.from('po_orders').select('id').eq('po_number', s.po_number).limit(1)
-        alreadyExists = !!(dup && dup.length)
-      }
-      if (alreadyExists) {
-        pos_skipped++
-        if (!dry_run) await supabase.from('bc_po_staging').update({ promotion_status: 'skipped', promotion_notes: 'already_in_po_orders' }).eq('id', s.id)
-        details.push({ po_number: s.po_number, status: dry_run ? 'would_skip' : 'skipped', new_po_id: null, reason: 'already_in_po_orders' })
-        continue
-      }
-      seenPoNumbers.add(s.po_number)
-
-      if (dry_run) {
-        details.push({ po_number: s.po_number, status: 'would_promote', new_po_id: null, line_items: stagingLis.length })
-        pos_promoted++; line_items_promoted += stagingLis.length
-        continue
-      }
-
-      // 1. Insert the PO.
-      const poRow = {
-        mr_number: s.mr_number, po_number: s.po_number, mr_description: s.mr_description,
-        mr_date: dateOrNull(s.mr_date), rig_name: s.rig_name, office_location: s.office_location,
-        vendor_code: s.vendor_code, vendor_name: s.vendor_name,
-        material_description: s.material_description, material_description_2: s.material_description_2,
-        po_date: dateOrNull(s.po_date), status: s.po_status, buyer_code: s.buyer_code,
-        grn_number: s.grn_number, delivered_to_rig_date: dateOrNull(s.gran_date),
-        quantities_pending_confirmation: s.quantities_pending_confirmation,
-        bc_blanket_order_id: s.bc_blanket_order_id, bc_linked_order_id: s.bc_linked_order_id,
-        bc_source: true, bc_last_synced: now(), created_by: req.user.id, updated_at: now(),
-      }
-      const { data: newPo, error: poErr } = await supabase.from('po_orders').insert(poRow).select('id').single()
-      if (poErr) {
-        pos_failed++
-        await supabase.from('bc_po_staging').update({ promotion_status: 'failed', promotion_notes: `PO insert: ${poErr.message}` }).eq('id', s.id)
-        details.push({ po_number: s.po_number, status: 'failed', new_po_id: null, error: poErr.message })
-        continue
-      }
-      const poId = newPo.id
-
-      // 2. Insert line items (generated columns quantity_pending/item_status are skipped).
-      if (stagingLis.length) {
-        const liRows = stagingLis.map(li => ({
-          po_id: poId,
-          item_name: li.item_code,
-          material_description: li.item_description ?? null,
-          unit: li.uom ?? null,
-          quantity_ordered: li.qty_ordered ?? 0,
-          quantity_delivered: li.qty_received ?? 0,
-        }))
-        const { data: insertedLis, error: liErr } = await supabase.from('po_line_items').insert(liRows).select('id')
-        if (liErr) {
-          // Compensate: remove the PO just inserted (cascades any line items).
-          await supabase.from('po_orders').delete().eq('id', poId)
-          pos_failed++
-          await supabase.from('bc_po_staging').update({ promotion_status: 'failed', promotion_notes: `Line item insert: ${liErr.message}` }).eq('id', s.id)
-          details.push({ po_number: s.po_number, status: 'failed', new_po_id: null, error: liErr.message })
-          continue
-        }
-        line_items_promoted += insertedLis.length
-        // Mark staged line items promoted, linking to their new ids (by order).
-        for (let k = 0; k < stagingLis.length; k++) {
-          await supabase.from('bc_po_line_items_staging')
-            .update({ promotion_status: 'promoted', promoted_at: now(), promoted_line_item_id: insertedLis[k]?.id ?? null })
-            .eq('id', stagingLis[k].id)
-        }
-      }
-
-      // 3. Mark the staging PO promoted.
-      await supabase.from('bc_po_staging')
-        .update({ promotion_status: 'promoted', promoted_at: now(), promoted_po_id: poId })
-        .eq('id', s.id)
-      pos_promoted++
-      details.push({ po_number: s.po_number, status: 'promoted', new_po_id: poId })
-    }
-
-    // Remaining pending INSERT rows for this run.
-    const { count: remaining } = await supabase
-      .from('bc_po_staging').select('id', { count: 'exact', head: true })
-      .eq('sync_run_id', sync_run_id).eq('promotion_status', 'pending').eq('sync_action', 'INSERT')
-
-    res.json({
-      success: true,
-      dry_run,
-      batch_size_requested: batch_size,
-      pos_promoted, pos_failed, pos_skipped, line_items_promoted,
-      details,
-      remaining_pending: remaining ?? 0,
-    })
+    // Shared promote logic (also used by the cron scheduler when BC_SYNC_ENABLED=true).
+    const result = await promoteRun({ sync_run_id, batch_size, dry_run, createdBy: req.user.id })
+    res.json(result)
   } catch (e) {
     console.error('[bc-promote] FAILED:', e.message)
     res.status(500).json({ success: false, error: e.message, hint: 'Ensure v27 columns exist on po_orders and staging tables are populated.' })
@@ -750,6 +532,35 @@ router.get('/sync-runs', async (_req, res) => {
     .from('bc_sync_runs').select('*').order('started_at', { ascending: false }).limit(20)
   if (error) return res.status(500).json({ error: error.message })
   res.json(data || [])
+})
+
+// ─── GET /api/admin/bc-integration/cron-status ────────────────────────────────
+// Scheduler state for the "Automated Sync" card: enabled, next run, last run,
+// and live progress of an in-flight run.
+router.get('/cron-status', async (_req, res) => {
+  try {
+    res.json(await getSchedulerStatus())
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ─── POST /api/admin/bc-integration/trigger-sync-now ──────────────────────────
+// Fires a full 14-rig sync in the background and returns 202 immediately. The
+// client polls /cron-status for progress. Promotion runs only if BC_SYNC_ENABLED.
+router.post('/trigger-sync-now', async (req, res) => {
+  const status = await getSchedulerStatus()
+  if (status.current_run) {
+    return res.status(409).json({ error: 'A sync is already running. Please wait for it to finish.' })
+  }
+  // Fire-and-forget: do NOT await (the run takes ~10-15 min).
+  runFullSync(`manual-admin-${req.user.id}`, req.user.id)
+    .catch(e => console.error('[cron-sync] manual trigger error:', e))
+  res.status(202).json({
+    accepted: true,
+    message: 'Sync started for all 14 rigs. Watch progress in the Automated Sync card / server logs.',
+    promote_enabled: process.env.BC_SYNC_ENABLED === 'true',
+  })
 })
 
 module.exports = router

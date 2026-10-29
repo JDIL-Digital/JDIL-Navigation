@@ -1214,35 +1214,210 @@ function PreviewSyncCard() {
 //  SYNC TO STAGING (Phase 2 — writes to bc_po_staging, NOT po_orders)
 // ═══════════════════════════════════════════════════════════════════════════════
 const RUN_STATUS_BADGE = {
-  running: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400',
-  success: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400',
-  failed:  'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400',
+  running:         'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400',
+  success:         'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400',
+  partial_failure: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400',
+  failed:          'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400',
+}
+
+// Human label for how a run was triggered. Cron runs carry a trigger_source
+// (v28); older manual runs only have a triggered_by UUID.
+function triggerLabel(run) {
+  const t = run.trigger_source || ''
+  if (t === 'cron-9am') return '🕘 Cron 9am'
+  if (t === 'cron-6pm') return '🕕 Cron 6pm'
+  if (t.startsWith('manual-admin')) return '👤 Manual'
+  if (run.triggered_by) return '👤 Manual'
+  return '—'
+}
+
+const RIG_RESULT_DOT = {
+  success: 'text-green-600 dark:text-green-400',
+  partial: 'text-amber-600 dark:text-amber-400',
+  failed:  'text-red-600 dark:text-red-400',
+}
+
+// One run row; expandable when it carries a per-rig breakdown (rig_results, v28).
+function RunRow({ run }) {
+  const [open, setOpen] = useState(false)
+  const rigs = Array.isArray(run.rig_results) ? run.rig_results : []
+  const expandable = rigs.length > 0
+  return (
+    <>
+      <tr className={expandable ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50' : ''} onClick={expandable ? () => setOpen(o => !o) : undefined}>
+        <td className="table-cell text-xs whitespace-nowrap">
+          {expandable && <span className={`inline-block mr-1 transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>}
+          {fmtDateTime(run.started_at)}
+        </td>
+        <td className="table-cell text-xs whitespace-nowrap">{triggerLabel(run)}</td>
+        <td className="table-cell text-xs">{run.rig_filter || 'All'}</td>
+        <td className="table-cell text-xs"><span className={`rounded-full px-2 py-0.5 ${RUN_STATUS_BADGE[run.status] || ''}`}>{run.status}</span></td>
+        <td className="table-cell text-xs text-center">{run.staging_rows_inserted ?? 0}</td>
+        <td className="table-cell text-xs text-center">{run.pos_promoted ?? 0}</td>
+        <td className="table-cell text-xs">{run.processing_time_ms != null ? `${(run.processing_time_ms / 1000).toFixed(1)}s` : '—'}</td>
+      </tr>
+      {open && expandable && (
+        <tr>
+          <td colSpan={7} className="bg-gray-50 dark:bg-gray-900/40 px-6 py-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-1">
+              {rigs.map((r, i) => (
+                <div key={i} className="text-xs flex items-center gap-1.5">
+                  <span className={RIG_RESULT_DOT[r.status] || 'text-gray-400'}>●</span>
+                  <span className="font-mono">{r.rig}</span>
+                  <span className="text-gray-500 dark:text-gray-400">
+                    {r.staging_rows ?? 0} staged{r.pos_promoted ? `, ${r.pos_promoted} promoted` : ''}
+                    {r.error ? ` — ${r.error}` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {run.error_message && <p className="text-xs text-red-600 dark:text-red-400 mt-2">First error: {run.error_message}</p>}
+          </td>
+        </tr>
+      )}
+    </>
+  )
 }
 
 function RecentRunsTable({ runs }) {
   if (!runs.length) return <p className="text-xs text-gray-400 dark:text-gray-500 p-3">No sync runs yet.</p>
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[520px]">
+      <table className="w-full min-w-[640px]">
         <thead><tr className="border-b border-gray-200 dark:border-gray-800">
           <th className="table-header">Started</th>
+          <th className="table-header">Trigger</th>
           <th className="table-header">Rig</th>
           <th className="table-header">Status</th>
-          <th className="table-header text-center">Rows</th>
+          <th className="table-header text-center">Staged</th>
+          <th className="table-header text-center">Promoted</th>
           <th className="table-header">Duration</th>
         </tr></thead>
         <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-          {runs.map(run => (
-            <tr key={run.id}>
-              <td className="table-cell text-xs whitespace-nowrap">{fmtDateTime(run.started_at)}</td>
-              <td className="table-cell text-xs">{run.rig_filter || 'All'}</td>
-              <td className="table-cell text-xs"><span className={`rounded-full px-2 py-0.5 ${RUN_STATUS_BADGE[run.status] || ''}`}>{run.status}</span></td>
-              <td className="table-cell text-xs text-center">{run.staging_rows_inserted ?? 0}</td>
-              <td className="table-cell text-xs">{run.processing_time_ms != null ? `${(run.processing_time_ms / 1000).toFixed(1)}s` : '—'}</td>
-            </tr>
-          ))}
+          {runs.map(run => <RunRow key={run.id} run={run} />)}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// ── Automated Sync (cron) status + manual trigger ──────────────────────────────
+function AutomatedSyncCard() {
+  const [st, setSt]       = useState(null)   // cron-status payload
+  const [loadErr, setLoadErr]   = useState('')
+  const [triggering, setTriggering] = useState(false)
+  const [triggerErr, setTriggerErr] = useState('')
+  const [triggerMsg, setTriggerMsg] = useState('')
+
+  async function load() {
+    try { setSt(await biApi('/cron-status')); setLoadErr('') }
+    catch (e) { setLoadErr(e.message) }
+  }
+  useEffect(() => {
+    load()
+    const id = setInterval(load, 5000)   // live refresh every 5s
+    return () => clearInterval(id)
+  }, [])
+
+  const run = st?.current_run
+  const active = !!run
+
+  async function trigger() {
+    if (!window.confirm('This will sync ALL 14 rigs sequentially (~15-20 minutes). Continue?')) return
+    setTriggering(true); setTriggerErr(''); setTriggerMsg('')
+    try {
+      const res = await biApi('/trigger-sync-now', 'POST')
+      setTriggerMsg(res.message || 'Sync started.')
+      await load()
+    } catch (e) { setTriggerErr(e.message) }
+    setTriggering(false)
+  }
+
+  const last = st?.last_run_info
+  const pct = run && run.total_rigs ? Math.round((run.rig_index / run.total_rigs) * 100) : 0
+
+  return (
+    <div className="card p-5">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-sm font-semibold text-jdil-green mb-0.5">Automated Sync</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Scheduled BC → staging sync for all 14 rigs. Promotion to po_orders runs only when enabled on the server.
+          </p>
+        </div>
+        <button onClick={trigger} disabled={triggering || active}
+          className="flex items-center gap-2 text-sm text-white px-4 py-2 rounded-lg font-medium bg-jdil-green hover:brightness-110 disabled:opacity-60 disabled:bg-gray-400">
+          {(triggering || active) && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+          {active ? 'Sync running…' : triggering ? 'Starting…' : 'Run Sync Now'}
+        </button>
+      </div>
+
+      {/* Status grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4">
+        <div className="rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-800/60">
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">Scheduler</div>
+          <div className={`text-sm font-semibold ${st?.enabled ? 'text-green-600 dark:text-green-400' : 'text-gray-400'}`}>
+            {st?.enabled ? 'Enabled' : 'Disabled'}
+          </div>
+        </div>
+        <div className="rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-800/60">
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">Promote to po_orders</div>
+          <div className={`text-sm font-semibold ${st?.promote_enabled ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400'}`}>
+            {st?.promote_enabled ? 'ON' : 'OFF (stage only)'}
+          </div>
+        </div>
+        <div className="rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-800/60">
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">Next scheduled run</div>
+          <div className="text-sm font-semibold text-gray-700 dark:text-gray-200">{st?.next_run ? fmtDateTime(st.next_run) : '—'}</div>
+        </div>
+        <div className="rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-800/60">
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">Last automated run</div>
+          <div className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+            {last ? (
+              <span>{fmtDateTime(last.started_at)} <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] ${RUN_STATUS_BADGE[last.status] || ''}`}>{last.status}</span></span>
+            ) : '—'}
+          </div>
+        </div>
+      </div>
+
+      <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-2">Schedule: {st?.schedule || '09:00 & 18:00 IST daily'}</p>
+
+      {/* Live progress */}
+      {active && (
+        <div className="mt-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-4 py-3">
+          <div className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-400 font-medium">
+            <div className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+            Syncing rig {run.rig_index} of {run.total_rigs}: {run.current_rig || '…'}…
+          </div>
+          <div className="mt-2 h-2 rounded-full bg-amber-100 dark:bg-amber-900/40 overflow-hidden">
+            <div className="h-full bg-amber-500 transition-all duration-500" style={{ width: `${pct}%` }} />
+          </div>
+          <p className="text-[11px] text-amber-700/80 dark:text-amber-400/80 mt-1">
+            Promotion {run.promote_enabled ? 'ON' : 'OFF'} · started {fmtDateTime(run.started_at)}
+          </p>
+        </div>
+      )}
+
+      {triggerMsg && !active && <p className="text-xs text-green-600 dark:text-green-400 mt-3">{triggerMsg}</p>}
+      {triggerErr && <p className="text-xs text-red-600 dark:text-red-400 mt-2">{triggerErr}</p>}
+      {loadErr  && <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">Status unavailable: {loadErr}</p>}
+
+      {/* Last run per-rig breakdown */}
+      {last && Array.isArray(last.rig_results) && last.rig_results.length > 0 && (
+        <Collapsible title="Last run — per-rig breakdown" defaultOpen={false}>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-1 p-3">
+            {last.rig_results.map((r, i) => (
+              <div key={i} className="text-xs flex items-center gap-1.5">
+                <span className={RIG_RESULT_DOT[r.status] || 'text-gray-400'}>●</span>
+                <span className="font-mono">{r.rig}</span>
+                <span className="text-gray-500 dark:text-gray-400">
+                  {r.staging_rows ?? 0} staged{r.pos_promoted ? `, ${r.pos_promoted} promoted` : ''}{r.error ? ` — ${r.error}` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Collapsible>
+      )}
     </div>
   )
 }
@@ -1732,6 +1907,9 @@ export default function BCIntegrationTab() {
 
       {/* Preview sync dry-run (below data fetch, above the sub-tabs) */}
       <PreviewSyncCard />
+
+      {/* Automated sync (cron) status + manual trigger (above Sync to Staging) */}
+      <AutomatedSyncCard />
 
       {/* Sync to staging (writes to bc_po_staging, above the sub-tabs) */}
       <SyncToStagingCard onViewStaging={id => { setStagingRunId(id); setSub(4) }} />
