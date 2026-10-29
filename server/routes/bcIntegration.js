@@ -407,6 +407,17 @@ router.post('/promote-to-po-orders', async (req, res) => {
   const batch_size = Math.min(Math.max(parseInt(req.query.batch_size, 10) || 10, 1), 1000)
   const dry_run = req.query.dry_run === 'true'
 
+  // Safety gate — blocks REAL promote writes unless enabled. Dry runs are
+  // read-only (no writes) and always allowed, so admins can test the workflow.
+  if (!dry_run && process.env.BC_SYNC_ENABLED !== 'true') {
+    return res.status(403).json({
+      success: false,
+      error: 'BC sync is disabled',
+      message: 'Promote operations require BC_SYNC_ENABLED=true in server environment',
+      hint: 'This is a safety gate. Set BC_SYNC_ENABLED=true in server/.env and restart server to enable promotions. Dry runs are always allowed.',
+    })
+  }
+
   try {
     // Shared promote logic (also used by the cron scheduler when BC_SYNC_ENABLED=true).
     const result = await promoteRun({ sync_run_id, batch_size, dry_run, createdBy: req.user.id })
@@ -574,6 +585,16 @@ router.post('/trigger-sync-now', async (req, res) => {
     accepted: true,
     message: 'Sync started for all 14 rigs. Watch progress in the Automated Sync card / server logs.',
     promote_enabled: process.env.BC_SYNC_ENABLED === 'true',
+  })
+})
+
+// ─── GET /api/admin/bc-integration/env-status ─────────────────────────────────
+// Reports safety-gate flags so the UI can warn/disable accordingly. Booleans only.
+router.get('/env-status', (_req, res) => {
+  res.json({
+    bc_sync_enabled: process.env.BC_SYNC_ENABLED === 'true',
+    bc_cron_enable:  process.env.BC_CRON_ENABLE === 'true',
+    alerts_enabled:  process.env.ALERTS_ENABLED === 'true',
   })
 })
 

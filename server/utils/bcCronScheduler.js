@@ -126,13 +126,17 @@ async function runFullSync(triggeredBy = 'cron', userId = null) {
       totalBos += s.total_bos; totalPos += s.total_pos; within += s.within; before += s.before; stagingRows += s.staging_rows
       rigResult.staging_rows = s.staging_rows
 
-      if (promoteEnabled && s.staging_rows > 0) {
+      // Promote is gated behind BC_SYNC_ENABLED. When off, stage only.
+      if (!promoteEnabled) {
+        rigResult.promote_skipped = true
+        rigResult.promote_skip_reason = 'BC_SYNC_ENABLED=false'
+      } else if (s.staging_rows > 0) {
         const p = await promoteRun({ sync_run_id: runId, batch_size: PROMOTE_BATCH, dry_run: false, createdBy: userId || null })
         rigResult.pos_promoted = p.pos_promoted
         posPromoted += p.pos_promoted
         if (p.pos_failed > 0) { rigResult.status = 'partial'; rigResult.error = `${p.pos_failed} promotion(s) failed` }
       }
-      console.log(`[cron-sync] run ${runId}: rig ${rig} done — ${s.staging_rows} staged, ${rigResult.pos_promoted} promoted`)
+      console.log(`[cron-sync] run ${runId}: rig ${rig} done — ${s.staging_rows} staged, ${rigResult.promote_skipped ? 'promote skipped (gate off)' : `${rigResult.pos_promoted} promoted`}`)
     } catch (e) {
       rigsFailed++
       rigResult.status = 'failed'

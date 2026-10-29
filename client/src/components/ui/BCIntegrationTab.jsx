@@ -1353,6 +1353,13 @@ function AutomatedSyncCard() {
         </button>
       </div>
 
+      {/* Promote-disabled safety banner */}
+      {st && !st.promote_enabled && (
+        <div className="mt-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 text-orange-700 dark:text-orange-400 text-xs font-medium rounded-lg px-3 py-2">
+          ⚠️ Promote is DISABLED. Set <span className="font-mono">BC_SYNC_ENABLED=true</span> in server env to enable. Syncs will stage data for review only.
+        </div>
+      )}
+
       {/* Status grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4">
         <div className="rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-800/60">
@@ -1796,9 +1803,13 @@ function StagingRowsSub({ initialRunId = '' }) {
   const [promoting, setPromoting] = useState(false)
   const [promoteResult, setPromoteResult] = useState(null)
   const [promoteErr, setPromoteErr]       = useState('')
+  const [syncEnabled, setSyncEnabled]     = useState(null)   // null = unknown until /env-status loads
 
   async function loadRuns() {
     try { setRuns(await biApi('/sync-runs')) } catch { /* non-critical */ }
+  }
+  async function loadEnv() {
+    try { const e = await biApi('/env-status'); setSyncEnabled(!!e.bc_sync_enabled) } catch { /* non-critical */ }
   }
   async function loadRows() {
     setLoading(true); setError('')
@@ -1809,7 +1820,7 @@ function StagingRowsSub({ initialRunId = '' }) {
     } catch (e) { setError(e.message) }
     setLoading(false)
   }
-  useEffect(() => { loadRuns() }, [])            // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadRuns(); loadEnv() }, [])            // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadRows(); setPlan(null); setPlanErr('') }, [runFilter, statusFilter])  // eslint-disable-line react-hooks/exhaustive-deps
 
   async function analyze() {
@@ -1890,10 +1901,11 @@ function StagingRowsSub({ initialRunId = '' }) {
               <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} className="accent-jdil-green w-4 h-4" disabled={promoting} />
               Dry Run (no writes)
             </label>
-            <button onClick={promote} disabled={!runFilter || promoting}
+            <button onClick={promote} disabled={!runFilter || promoting || (!dryRun && syncEnabled === false)}
+              title={!dryRun && syncEnabled === false ? 'BC_SYNC_ENABLED=false in server environment' : undefined}
               className="flex items-center gap-2 text-sm text-white px-4 py-2 rounded-lg font-medium bg-red-600 hover:bg-red-700 disabled:opacity-60 disabled:bg-gray-400">
               {promoting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-              {promoting ? 'Promoting…' : (dryRun ? 'Promote Batch (Dry Run)' : 'Promote Batch')}
+              {!dryRun && syncEnabled === false ? 'Promote (DISABLED)' : promoting ? 'Promoting…' : (dryRun ? 'Promote Batch (Dry Run)' : 'Promote Batch')}
             </button>
             {!runFilter && <span className="text-xs text-gray-400 dark:text-gray-500 pb-2">Select a Sync Run below first.</span>}
           </div>
@@ -1913,7 +1925,7 @@ function StagingRowsSub({ initialRunId = '' }) {
               <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">Remaining pending INSERTs: {promoteResult.remaining_pending}</p>
               <div className="flex gap-2 mt-2">
                 {!promoteResult.dry_run && promoteResult.remaining_pending > 0 && (
-                  <button onClick={promote} disabled={promoting} className="btn-primary text-xs px-3 py-1.5">Promote Next Batch</button>
+                  <button onClick={promote} disabled={promoting || syncEnabled === false} className="btn-primary text-xs px-3 py-1.5">Promote Next Batch</button>
                 )}
                 <button onClick={loadRows} className="btn-secondary text-xs px-3 py-1.5">Refresh Rows</button>
               </div>

@@ -208,6 +208,10 @@ process.on('uncaughtException', err => {
 app.listen(PORT, () => {
   console.log(`JDIL Navigation server running on port ${PORT} [${IS_PROD ? 'production' : 'development'}]`)
 
+  // Surface the BC safety-gate state at startup so the operator knows what's live.
+  console.log('[bc-safety] BC_SYNC_ENABLED:', process.env.BC_SYNC_ENABLED || 'not set (false)')
+  console.log('[bc-safety] BC_CRON_ENABLE:', process.env.BC_CRON_ENABLE || 'not set (false)')
+
   // ── BC automated sync scheduler (9am + 6pm IST) ─────────────────────────────
   // Only register the schedule in production, or when explicitly enabled for
   // local testing via BC_CRON_ENABLE=true. Promotion to po_orders is separately
