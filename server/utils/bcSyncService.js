@@ -18,6 +18,8 @@ const { getBCAccessToken } = require('./bcAuth')
 const { supabase } = require('./supabaseAdmin')
 const { previewSync } = require('./bcSyncProcessor')
 const { isWithinSyncRange } = require('./bcTransform')
+const rateLimiter = require('./bcRateLimiter')
+const { withRetry } = require('./bcRetry')
 
 // ── BC query helpers ──────────────────────────────────────────────────────────
 function bcBase() {
@@ -40,11 +42,19 @@ function buildFilter(rig_prefix, fiscal_years) {
 }
 
 async function fetchBlanketOrders({ rig_prefix, fiscal_years, label }) {
-  const { access_token } = await getBCAccessToken()
+  const { access_token } = await getBCAccessToken()   // token stays UNWRAPPED (no limiter/retry)
   const expand = '$expand=blanketLines($expand=linkedOrders($expand=receiptHeaders($expand=receiptLines)))'
   const url = `${bcBase()}?$top=100&$orderby=documentNo desc&${expand}${buildFilter(rig_prefix, fiscal_years)}`
   console.log(`[bc-sync]${label ? ` ${label}` : ''} GET ${url}`)   // URL + status only — never the token
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' } })
+  // Wrap only the DATA fetch with rate limiter + retry (the sync-to-staging
+  // endpoint and the cron scheduler both reach BC through here).
+  await rateLimiter.acquire()
+  let r
+  try {
+    r = await withRetry(() => fetch(url, { headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' } }), { maxAttempts: 3 })
+  } finally {
+    rateLimiter.release()
+  }
   const text = await r.text()
   let data = null
   try { data = JSON.parse(text) } catch { /* non-JSON body */ }

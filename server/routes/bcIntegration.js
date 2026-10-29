@@ -5,6 +5,20 @@ const { supabase } = require('../utils/supabaseAdmin')
 const { previewSync } = require('../utils/bcSyncProcessor')
 const { stageRig, promoteRun } = require('../utils/bcSyncService')
 const { getSchedulerStatus, runFullSync } = require('../utils/bcCronScheduler')
+const rateLimiter = require('../utils/bcRateLimiter')
+const { withRetry } = require('../utils/bcRetry')
+
+// Wrap a BC DATA fetch with the rate limiter + retry. Token fetch is NOT routed
+// through here (it stays plain in bcAuth.js) — that avoids the re-entrant
+// deadlock that broke the connection previously.
+async function bcFetch(url, options = {}) {
+  await rateLimiter.acquire()
+  try {
+    return await withRetry(() => fetch(url, options), { maxAttempts: 3 })
+  } finally {
+    rateLimiter.release()
+  }
+}
 
 // Admin-only.
 router.use(requireAuth)
@@ -92,7 +106,7 @@ router.get('/test-fetch', async (req, res) => {
         let status_code = null, ok = false, records_returned = null, error = null
         try {
           console.log(`[bc-discover] #${i + 1} GET ${full_url}`)
-          const r = await fetch(full_url, { headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' } })
+          const r = await bcFetch(full_url, { headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' } })
           status_code = r.status
           ok = r.ok
           const text = await r.text()
@@ -167,7 +181,7 @@ router.get('/test-fetch', async (req, res) => {
     const started = Date.now()
     let r
     try {
-      r = await fetch(url, { headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' } })
+      r = await bcFetch(url, { headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' } })
     } catch {
       return res.status(500).json({
         success: false,
@@ -275,7 +289,7 @@ router.get('/preview-sync', async (req, res) => {
     const started = Date.now()
     let r
     try {
-      r = await fetch(url, { headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' } })
+      r = await bcFetch(url, { headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' } })
     } catch {
       return res.status(500).json({ success: false, error: 'Could not reach Business Central API', hint: 'Check outbound internet and that api.businesscentral.dynamics.com is reachable.' })
     }
@@ -561,6 +575,44 @@ router.post('/trigger-sync-now', async (req, res) => {
     message: 'Sync started for all 14 rigs. Watch progress in the Automated Sync card / server logs.',
     promote_enabled: process.env.BC_SYNC_ENABLED === 'true',
   })
+})
+
+// ─── GET /api/admin/bc-integration/rate-limit-status ──────────────────────────
+// Live counters for the "BC Rate Limiter Status" card. No BC calls.
+router.get('/rate-limit-status', (_req, res) => {
+  res.json(rateLimiter.getStats())
+})
+
+// ─── GET /api/admin/bc-integration/rate-limiter-test ──────────────────────────
+// Self-test with MOCK work only (no BC calls): fires 10 staggered jobs that each
+// acquire → simulate 300ms of work → release, and records how many were active
+// at acquire time. Proves the concurrency cap holds before anything real is wrapped.
+router.get('/rate-limiter-test', async (_req, res) => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms))
+  const test_results = []
+  async function job(i) {
+    await sleep(i * 100)                       // stagger starts so jobs overlap
+    await rateLimiter.acquire()
+    const active_during = rateLimiter.getStats().active
+    test_results[i] = { time: `t${i}`, active_during, acquired: true }
+    await sleep(300)                           // simulate work
+    rateLimiter.release()
+  }
+  try {
+    await Promise.all(Array.from({ length: 10 }, (_, i) => job(i)))
+    const max_active = test_results.reduce((m, r) => Math.max(m, r.active_during), 0)
+    res.json({
+      success: true,
+      current_stats: rateLimiter.getStats(),
+      max_active_observed: max_active,
+      test_results,
+      message: max_active <= 3
+        ? 'Rate limiter working — active never exceeded 3.'
+        : `PROBLEM: active reached ${max_active} (expected ≤ 3).`,
+    })
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message })
+  }
 })
 
 module.exports = router

@@ -1008,6 +1008,7 @@ const RIG_PREFIX_OPTIONS = [
   { value: 'DDD',     label: 'DDD - Directional Drilling' },
   { value: 'TAWS',    label: 'TAWS - Taloja (TAWS)' },
   { value: 'RIG',     label: 'RIG - Taloja (RIG)' },
+  { value: 'RGEN',    label: 'RGEN - Nagothane (General)' },
 ]
 
 const FISCAL_YEAR_OPTIONS = [
@@ -1417,6 +1418,94 @@ function AutomatedSyncCard() {
             ))}
           </div>
         </Collapsible>
+      )}
+    </div>
+  )
+}
+
+// ── BC Rate Limiter status + self-test (nothing real is wrapped yet) ────────────
+function RateLimiterStatusCard() {
+  const [stats, setStats]       = useState(null)
+  const [testing, setTesting]   = useState(false)
+  const [testResult, setResult] = useState(null)
+  const [testErr, setTestErr]   = useState('')
+
+  async function load() {
+    try { setStats(await biApi('/rate-limit-status')) } catch { /* non-critical */ }
+  }
+  useEffect(() => {
+    load()
+    const id = setInterval(load, 10000)   // poll every 10s
+    return () => clearInterval(id)
+  }, [])
+
+  async function runTest() {
+    setTesting(true); setTestErr(''); setResult(null)
+    try { setResult(await biApi('/rate-limiter-test')) }
+    catch (e) { setTestErr(e.message) }
+    setTesting(false)
+    await load()
+  }
+
+  const active       = stats?.active ?? 0
+  const rpm          = stats?.requests_last_minute ?? 0
+  const concurrentMax = stats?.limits?.concurrent ?? 3
+  const perMinMax     = stats?.limits?.per_minute ?? 100
+  // grey when idle, yellow when any activity, orange when approaching a cap.
+  const approaching = active >= concurrentMax - 1 || rpm >= Math.round(perMinMax * 0.7)
+  const toneCls = approaching ? 'text-orange-600 dark:text-orange-400'
+    : active > 0 ? 'text-amber-600 dark:text-amber-400'
+    : 'text-gray-600 dark:text-gray-300'
+  const boxCls = approaching ? 'bg-orange-50 dark:bg-orange-900/20'
+    : active > 0 ? 'bg-amber-50 dark:bg-amber-900/20'
+    : 'bg-gray-50 dark:bg-gray-800/60'
+
+  return (
+    <div className="card p-5">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-sm font-semibold text-jdil-green mb-0.5">BC Rate Limiter Status</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Standalone throttle (max {concurrentMax} concurrent, {perMinMax}/min). Not wrapping any BC call yet — this is for verification.
+          </p>
+        </div>
+        <button onClick={runTest} disabled={testing}
+          className="flex items-center gap-2 text-sm text-white px-4 py-2 rounded-lg font-medium bg-jdil-green hover:brightness-110 disabled:opacity-60 disabled:bg-gray-400">
+          {testing && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+          {testing ? 'Testing…' : 'Test Limiter'}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mt-4">
+        <div className={`rounded-lg px-3 py-2 ${boxCls}`}>
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">Active requests</div>
+          <div className={`text-lg font-bold leading-none ${toneCls}`}>{active} / {concurrentMax}</div>
+        </div>
+        <div className={`rounded-lg px-3 py-2 ${boxCls}`}>
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">Requests in last minute</div>
+          <div className={`text-lg font-bold leading-none ${toneCls}`}>{rpm} / {perMinMax}</div>
+        </div>
+      </div>
+
+      {testErr && <p className="text-xs text-red-600 dark:text-red-400 mt-3">Test failed: {testErr}</p>}
+      {testResult && (
+        <div className={`mt-3 rounded-lg px-4 py-3 border ${testResult.max_active_observed <= 3
+          ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+          : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'}`}>
+          <p className={`text-sm font-medium ${testResult.max_active_observed <= 3 ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
+            {testResult.message}
+          </p>
+          <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">Max active observed: {testResult.max_active_observed}</p>
+          <Collapsible title={`Per-job results (${testResult.test_results?.length || 0})`} defaultOpen={false}>
+            <div className="p-2 grid grid-cols-2 sm:grid-cols-5 gap-1">
+              {(testResult.test_results || []).map((r, i) => (
+                <div key={i} className="text-xs font-mono text-gray-600 dark:text-gray-400">
+                  {r.time}: active={r.active_during}
+                </div>
+              ))}
+            </div>
+          </Collapsible>
+        </div>
       )}
     </div>
   )
@@ -1910,6 +1999,9 @@ export default function BCIntegrationTab() {
 
       {/* Automated sync (cron) status + manual trigger (above Sync to Staging) */}
       <AutomatedSyncCard />
+
+      {/* Rate limiter status + self-test (below Automated Sync, above Sync to Staging) */}
+      <RateLimiterStatusCard />
 
       {/* Sync to staging (writes to bc_po_staging, above the sub-tabs) */}
       <SyncToStagingCard onViewStaging={id => { setStagingRunId(id); setSub(4) }} />

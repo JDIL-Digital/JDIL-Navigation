@@ -21,8 +21,8 @@ const cron = require('node-cron')
 const { supabase } = require('./supabaseAdmin')
 const { stageRig, promoteRun } = require('./bcSyncService')
 
-// 14 rig prefixes, iterated in order. Matches RIG_PREFIX_OPTIONS in the client.
-const RIG_PREFIXES = ['RD1', 'RD1DD', 'RV1', 'RV1DD', 'RJS', 'RJSDD', 'RJE', 'RJEDD', 'RJSUP', 'RJSUPDD', 'MLU', 'DDD', 'TAWS', 'RIG']
+// 15 rig prefixes, iterated in order. Matches RIG_PREFIX_OPTIONS in the client.
+const RIG_PREFIXES = ['RD1', 'RD1DD', 'RV1', 'RV1DD', 'RJS', 'RJSDD', 'RJE', 'RJEDD', 'RJSUP', 'RJSUPDD', 'MLU', 'DDD', 'TAWS', 'RIG', 'RGEN']
 const FISCAL_YEARS = ['2627', '2728']         // current + next
 const RIG_DELAY_MS = 30_000                     // be gentle on BC between rigs
 const STALE_RUN_MS = 30 * 60_000                // a 'running' row older than this is treated as stale
