@@ -21,6 +21,15 @@ const { isWithinSyncRange } = require('./bcTransform')
 const rateLimiter = require('./bcRateLimiter')
 const { withRetry } = require('./bcRetry')
 
+// How many blanket orders we request per rig in a single BC call ($top), how
+// many pages we will walk before giving up ($skip loop), and the pause between
+// pages so we stay gentle on BC / the rate limiter.
+const BO_FETCH_TOP     = 100
+const BO_MAX_PAGES     = 10         // safety cap → up to 1,000 BOs per rig
+const BO_PAGE_DELAY_MS = 500        // delay between pages
+
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+
 // ── BC query helpers ──────────────────────────────────────────────────────────
 function bcBase() {
   const { BC_TENANT_ID, BC_ENVIRONMENT, BC_COMPANY_ID } = process.env
@@ -41,29 +50,71 @@ function buildFilter(rig_prefix, fiscal_years) {
   return ''
 }
 
+// NOTE: BC returns at most $top=100 BOs per call. A rig can have more than that,
+// so we PAGINATE with $skip, walking pages until BC returns a short page (natural
+// end) or we hit BO_MAX_PAGES (safety cap). likely_truncated is TRUE only when we
+// stop at the safety cap — i.e. there may still be more BOs we never fetched.
+// A full first page is NO LONGER truncation on its own; it just means "fetch the
+// next page". (Oct 2026: RV1DD hits the 100-per-page ceiling and needs paging.)
 async function fetchBlanketOrders({ rig_prefix, fiscal_years, label }) {
   const { access_token } = await getBCAccessToken()   // token stays UNWRAPPED (no limiter/retry)
   const expand = '$expand=blanketLines($expand=linkedOrders($expand=receiptHeaders($expand=receiptLines)))'
-  const url = `${bcBase()}?$top=100&$orderby=documentNo desc&${expand}${buildFilter(rig_prefix, fiscal_years)}`
-  console.log(`[bc-sync]${label ? ` ${label}` : ''} GET ${url}`)   // URL + status only — never the token
-  // Wrap only the DATA fetch with rate limiter + retry (the sync-to-staging
-  // endpoint and the cron scheduler both reach BC through here).
-  await rateLimiter.acquire()
-  let r
-  try {
-    r = await withRetry(() => fetch(url, { headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' } }), { maxAttempts: 3 })
-  } finally {
-    rateLimiter.release()
+  const filter = buildFilter(rig_prefix, fiscal_years)
+  const rigTag = rig_prefix || '(all)'
+
+  console.log(`[bc-pagination] Starting pagination for rig ${rigTag}`)
+
+  const all = []
+  let page = 0
+  let hitCap = false
+  for (page = 1; page <= BO_MAX_PAGES; page++) {
+    const skip = (page - 1) * BO_FETCH_TOP
+    const url = `${bcBase()}?$top=${BO_FETCH_TOP}&$skip=${skip}&$orderby=documentNo desc&${expand}${filter}`
+    console.log(`[bc-sync]${label ? ` ${label}` : ''} GET ${url}`)   // URL + status only — never the token
+
+    // Wrap only the DATA fetch with rate limiter + retry (the sync-to-staging
+    // endpoint and the cron scheduler both reach BC through here). The token
+    // fetch above stays outside the limiter to avoid re-entrant deadlock.
+    await rateLimiter.acquire()
+    let r
+    try {
+      r = await withRetry(() => fetch(url, { headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' } }), { maxAttempts: 3 })
+    } finally {
+      rateLimiter.release()
+    }
+    const text = await r.text()
+    let data = null
+    try { data = JSON.parse(text) } catch { /* non-JSON body */ }
+    if (!r.ok) {
+      throw Object.assign(new Error(data?.error?.message || `BC API returned HTTP ${r.status}`), {
+        hint: 'Check BC_ENVIRONMENT, BC_COMPANY_ID and app permissions.',
+      })
+    }
+
+    const pageValue = Array.isArray(data?.value) ? data.value : []
+    all.push(...pageValue)
+
+    console.log(`[bc-pagination] Rig ${rigTag} page ${page}: fetched ${pageValue.length} BOs (cumulative: ${all.length})`)
+    // ── TEMP DIAGNOSTICS (kept during pagination testing) ─────────────────────
+    console.log(`[bc-debug] fetched ${pageValue.length} entries from BC for ${rig_prefix} (page ${page})`)
+    if (page === 1) console.log(`[bc-debug] BC response data.value sample first entry:`, JSON.stringify(pageValue[0]).substring(0, 200))
+    // ──────────────────────────────────────────────────────────────────────────
+
+    if (pageValue.length < BO_FETCH_TOP) break          // short page → natural end
+    if (page >= BO_MAX_PAGES) { hitCap = true; break }   // safety cap → maybe more exist
+    await sleep(BO_PAGE_DELAY_MS)                         // be gentle between pages
   }
-  const text = await r.text()
-  let data = null
-  try { data = JSON.parse(text) } catch { /* non-JSON body */ }
-  if (!r.ok) {
-    throw Object.assign(new Error(data?.error?.message || `BC API returned HTTP ${r.status}`), {
-      hint: 'Check BC_ENVIRONMENT, BC_COMPANY_ID and app permissions.',
-    })
+
+  const pages_fetched = page
+  console.log(`[bc-pagination] Completed: ${pages_fetched} pages, ${all.length} total BOs${hitCap ? ' (SAFETY CAP HIT — may be truncated)' : ''}`)
+
+  return {
+    value: all,
+    bo_count: all.length,
+    pages_fetched,
+    likely_truncated: hitCap,                            // only true at the safety cap
+    truncation_reason: hitCap ? 'safety_cap' : null,
   }
-  return data
 }
 
 // ── Stage one rig under an existing run ────────────────────────────────────────
@@ -72,8 +123,11 @@ async function fetchBlanketOrders({ rig_prefix, fiscal_years, label }) {
  * @returns {Promise<{ total_bos, total_pos, within, before, staging_rows, line_items, warnings_count, skipped_line_items }>}
  */
 async function stageRig({ rig_prefix, fiscal_years, runId, label }) {
-  const data    = await fetchBlanketOrders({ rig_prefix, fiscal_years, label })
-  const preview = await previewSync(data, supabase)
+  const fetched = await fetchBlanketOrders({ rig_prefix, fiscal_years, label })
+  if (fetched.likely_truncated) {
+    console.warn(`[bc-truncation] Rig ${rig_prefix || '(all)'} hit the ${fetched.pages_fetched}-page safety cap (${fetched.bo_count} BOs). There may be more — raise BO_MAX_PAGES or add deeper paging.`)
+  }
+  const preview = await previewSync(fetched, supabase)
 
   // Build staging PO records (each with its line items) for within-range POs.
   const poRecords = []   // [{ row, lineItems }]
@@ -161,6 +215,8 @@ async function stageRig({ rig_prefix, fiscal_years, runId, label }) {
     staging_rows: poRecords.length, line_items: lineItemsStaged,
     warnings_count: poRecords.filter(rec => rec.row.processed_warnings).length,
     skipped_line_items: skippedLineItems,
+    likely_truncated: fetched.likely_truncated, bo_count: fetched.bo_count,
+    pages_fetched: fetched.pages_fetched, truncation_reason: fetched.truncation_reason,
   }
 }
 

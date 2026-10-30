@@ -111,6 +111,7 @@ async function runFullSync(triggeredBy = 'cron', userId = null) {
   console.log(`[cron-sync] run ${runId} started — ${RIG_PREFIXES.length} rigs, promote=${promoteEnabled ? 'ON' : 'OFF'} (${triggeredBy})`)
 
   const perRig = []
+  const truncationWarnings = []   // rig prefixes that returned a full page (possible truncation)
   let totalBos = 0, totalPos = 0, within = 0, before = 0, stagingRows = 0, posPromoted = 0
   let firstError = null, rigsFailed = 0
 
@@ -125,6 +126,7 @@ async function runFullSync(triggeredBy = 'cron', userId = null) {
       const s = await stageRig({ rig_prefix: rig, fiscal_years: FISCAL_YEARS, runId, label: `run ${runId} ${rig}` })
       totalBos += s.total_bos; totalPos += s.total_pos; within += s.within; before += s.before; stagingRows += s.staging_rows
       rigResult.staging_rows = s.staging_rows
+      if (s.likely_truncated) { rigResult.likely_truncated = true; rigResult.bo_count = s.bo_count; truncationWarnings.push(rig) }
 
       // Promote is gated behind BC_SYNC_ENABLED. When off, stage only.
       if (!promoteEnabled) {
@@ -163,6 +165,7 @@ async function runFullSync(triggeredBy = 'cron', userId = null) {
     pos_within_range: within, pos_before_cutoff: before,
     staging_rows_inserted: stagingRows, pos_promoted: posPromoted,
     rig_results: perRig, error_message: firstError, processing_time_ms,
+    truncation_warnings: truncationWarnings.length ? truncationWarnings : null,
   }).eq('id', runId)
 
   _current = { ...(_current || {}), running: false, finished_at: new Date().toISOString(), status }

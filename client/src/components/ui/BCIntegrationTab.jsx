@@ -1025,11 +1025,12 @@ const ACTION_BADGE = {
 
 function StatCard({ label, value, color = 'gray' }) {
   const colors = {
-    gray:  'bg-gray-50 dark:bg-gray-800/60 text-gray-700 dark:text-gray-300',
-    green: 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400',
+    gray:   'bg-gray-50 dark:bg-gray-800/60 text-gray-700 dark:text-gray-300',
+    green:  'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400',
+    orange: 'bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400',
   }
   return (
-    <div className={`rounded-lg px-3 py-2 ${colors[color]}`}>
+    <div className={`rounded-lg px-3 py-2 ${colors[color] || colors.gray}`}>
       <div className="text-lg font-bold leading-none">{value}</div>
       <div className="text-[11px] mt-1">{label}</div>
     </div>
@@ -1242,6 +1243,7 @@ const RIG_RESULT_DOT = {
 function RunRow({ run }) {
   const [open, setOpen] = useState(false)
   const rigs = Array.isArray(run.rig_results) ? run.rig_results : []
+  const truncated = Array.isArray(run.truncation_warnings) ? run.truncation_warnings : []
   const expandable = rigs.length > 0
   return (
     <>
@@ -1252,7 +1254,15 @@ function RunRow({ run }) {
         </td>
         <td className="table-cell text-xs whitespace-nowrap">{triggerLabel(run)}</td>
         <td className="table-cell text-xs">{run.rig_filter || 'All'}</td>
-        <td className="table-cell text-xs"><span className={`rounded-full px-2 py-0.5 ${RUN_STATUS_BADGE[run.status] || ''}`}>{run.status}</span></td>
+        <td className="table-cell text-xs">
+          <span className={`rounded-full px-2 py-0.5 ${RUN_STATUS_BADGE[run.status] || ''}`}>{run.status}</span>
+          {truncated.length > 0 && (
+            <span
+              className="ml-1 rounded-full px-2 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 whitespace-nowrap"
+              title={`These rigs returned 100 BOs - may need pagination: ${truncated.join(', ')}`}
+            >⚠️ Possible truncation</span>
+          )}
+        </td>
         <td className="table-cell text-xs text-center">{run.staging_rows_inserted ?? 0}</td>
         <td className="table-cell text-xs text-center">{run.pos_promoted ?? 0}</td>
         <td className="table-cell text-xs">{run.processing_time_ms != null ? `${(run.processing_time_ms / 1000).toFixed(1)}s` : '—'}</td>
@@ -1265,6 +1275,9 @@ function RunRow({ run }) {
                 <div key={i} className="text-xs flex items-center gap-1.5">
                   <span className={RIG_RESULT_DOT[r.status] || 'text-gray-400'}>●</span>
                   <span className="font-mono">{r.rig}</span>
+                  {truncated.includes(r.rig) && (
+                    <span className="text-orange-600 dark:text-orange-400 whitespace-nowrap" title="Returned 100 BOs - may be truncated">⚠️ 100 BOs</span>
+                  )}
                   <span className="text-gray-500 dark:text-gray-400">
                     {r.staging_rows ?? 0} staged{r.pos_promoted ? `, ${r.pos_promoted} promoted` : ''}
                     {r.error ? ` — ${r.error}` : ''}
@@ -1587,12 +1600,13 @@ function SyncToStagingCard({ onViewStaging }) {
           <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg px-4 py-3 space-y-2">
             <p className="text-sm text-green-700 dark:text-green-400 font-medium">{result.message}</p>
             <p className="text-xs text-green-700/80 dark:text-green-400/80 font-mono">Sync Run ID: {result.sync_run_id}</p>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
               <StatCard label="BOs fetched" value={result.summary.total_bos_fetched} />
               <StatCard label="POs processed" value={result.summary.total_pos_processed} />
               <StatCard label="Within range" value={result.summary.pos_within_range} color="green" />
               <StatCard label="Before cutoff" value={result.summary.pos_before_cutoff} />
               <StatCard label="Staged rows" value={result.summary.staging_rows_inserted} color="green" />
+              <StatCard label="Pages" value={result.pages_fetched ?? '—'} color={result.likely_truncated ? 'orange' : undefined} />
             </div>
             {result.warnings_count > 0 && (
               <p className="text-xs text-gray-600 dark:text-gray-400">{result.warnings_count} row(s) have warnings (unknown rig / auto-assigned buyer).</p>

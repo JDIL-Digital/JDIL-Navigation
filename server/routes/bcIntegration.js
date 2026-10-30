@@ -354,6 +354,7 @@ router.post('/sync-to-staging', async (req, res) => {
       total_bos_fetched: s.total_bos, total_pos_processed: s.total_pos,
       pos_within_range: s.within, pos_before_cutoff: s.before,
       staging_rows_inserted: s.staging_rows, processing_time_ms,
+      truncation_warnings: s.likely_truncated ? [rig_prefix || 'ALL'] : null,
     }).eq('id', runId)
 
     res.json({
@@ -365,7 +366,11 @@ router.post('/sync-to-staging', async (req, res) => {
         staging_rows_inserted: s.staging_rows, line_items_staged: s.line_items, processing_time_ms,
       },
       warnings_count: s.warnings_count,
-      message: `${s.staging_rows} PO${s.staging_rows !== 1 ? 's' : ''} and ${s.line_items} line item${s.line_items !== 1 ? 's' : ''} inserted into staging. Review and promote when ready.`,
+      likely_truncated: s.likely_truncated,
+      truncation_reason: s.truncation_reason,
+      bo_count: s.bo_count,
+      pages_fetched: s.pages_fetched,
+      message: `${s.staging_rows} PO${s.staging_rows !== 1 ? 's' : ''} and ${s.line_items} line item${s.line_items !== 1 ? 's' : ''} inserted into staging across ${s.pages_fetched} page${s.pages_fetched !== 1 ? 's' : ''}${s.likely_truncated ? ' ⚠️ (safety cap hit — more may exist)' : ''}. Review and promote when ready.`,
     })
   } catch (e) {
     console.error(`[bc-staging] run ${runId} FAILED:`, e.message)
