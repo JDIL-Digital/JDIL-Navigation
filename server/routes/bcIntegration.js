@@ -4,7 +4,7 @@ const { getBCAccessToken } = require('../utils/bcAuth')
 const { supabase } = require('../utils/supabaseAdmin')
 const { previewSync } = require('../utils/bcSyncProcessor')
 const { stageRig, promoteRun } = require('../utils/bcSyncService')
-const { getSchedulerStatus, runFullSync } = require('../utils/bcCronScheduler')
+const { getSchedulerStatus, runFullSync, peekLock } = require('../utils/bcCronScheduler')
 const rateLimiter = require('../utils/bcRateLimiter')
 const { withRetry } = require('../utils/bcRetry')
 
@@ -579,16 +579,24 @@ router.get('/cron-status', async (_req, res) => {
 // Fires a full 14-rig sync in the background and returns 202 immediately. The
 // client polls /cron-status for progress. Promotion runs only if BC_SYNC_ENABLED.
 router.post('/trigger-sync-now', async (req, res) => {
-  const status = await getSchedulerStatus()
-  if (status.current_run) {
-    return res.status(409).json({ error: 'A sync is already running. Please wait for it to finish.' })
+  // Reliable lock check (in-memory + DB, survives restarts). A fresh running row
+  // → 409 Conflict. The scheduler also has a synchronous guard that stops any
+  // sub-second double-fire from actually running twice.
+  const lock = await peekLock()
+  if (lock.blocked) {
+    return res.status(409).json({
+      success: false,
+      error: 'Sync already running',
+      existing_run_id: lock.existing_run_id,
+      message: 'A sync is already running. Please wait for it to finish.',
+    })
   }
   // Fire-and-forget: do NOT await (the run takes ~10-15 min).
   runFullSync(`manual-admin-${req.user.id}`, req.user.id)
     .catch(e => console.error('[cron-sync] manual trigger error:', e))
   res.status(202).json({
     accepted: true,
-    message: 'Sync started for all 14 rigs. Watch progress in the Automated Sync card / server logs.',
+    message: 'Sync started for all 15 rigs. Watch progress in the Automated Sync card / server logs.',
     promote_enabled: process.env.BC_SYNC_ENABLED === 'true',
   })
 })

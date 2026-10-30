@@ -29,7 +29,7 @@ async function biApi(path = '', method = 'GET', body = undefined) {
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   })
   const json = await res.json().catch(() => ({}))
-  if (!res.ok) { const e = new Error(json.error || `Request failed (HTTP ${res.status})`); e.hint = json.hint; throw e }
+  if (!res.ok) { const e = new Error(json.error || `Request failed (HTTP ${res.status})`); e.hint = json.hint; e.status = res.status; e.serverMessage = json.message; throw e }
   return json
 }
 
@@ -1216,10 +1216,31 @@ function PreviewSyncCard() {
 //  SYNC TO STAGING (Phase 2 — writes to bc_po_staging, NOT po_orders)
 // ═══════════════════════════════════════════════════════════════════════════════
 const RUN_STATUS_BADGE = {
-  running:         'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400',
+  running:         'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400',
   success:         'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400',
   partial_failure: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400',
   failed:          'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400',
+  timeout:         'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400',
+  stale:           'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400',
+}
+
+// Friendly status labels with an at-a-glance icon.
+const RUN_STATUS_LABEL = {
+  running:         '⚡ Running',
+  success:         '✓ Success',
+  partial_failure: '⚠️ Partial',
+  failed:          '❌ Failed',
+  timeout:         '⏱️ Timeout',
+  stale:           '⚪ Stale',
+}
+
+// One run-status pill. Falls back to the raw status if it's an unknown value.
+function RunBadge({ status, className = '' }) {
+  return (
+    <span className={`rounded-full px-2 py-0.5 ${RUN_STATUS_BADGE[status] || 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'} ${className}`}>
+      {RUN_STATUS_LABEL[status] || status}
+    </span>
+  )
 }
 
 // Human label for how a run was triggered. Cron runs carry a trigger_source
@@ -1255,7 +1276,7 @@ function RunRow({ run }) {
         <td className="table-cell text-xs whitespace-nowrap">{triggerLabel(run)}</td>
         <td className="table-cell text-xs">{run.rig_filter || 'All'}</td>
         <td className="table-cell text-xs">
-          <span className={`rounded-full px-2 py-0.5 ${RUN_STATUS_BADGE[run.status] || ''}`}>{run.status}</span>
+          <RunBadge status={run.status} />
           {truncated.length > 0 && (
             <span
               className="ml-1 rounded-full px-2 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 whitespace-nowrap"
@@ -1337,18 +1358,27 @@ function AutomatedSyncCard() {
   const active = !!run
 
   async function trigger() {
-    if (!window.confirm('This will sync ALL 14 rigs sequentially (~15-20 minutes). Continue?')) return
+    if (!window.confirm('This will sync ALL 15 rigs sequentially (~15-20 minutes). Continue?')) return
     setTriggering(true); setTriggerErr(''); setTriggerMsg('')
     try {
       const res = await biApi('/trigger-sync-now', 'POST')
       setTriggerMsg(res.message || 'Sync started.')
       await load()
-    } catch (e) { setTriggerErr(e.message) }
+    } catch (e) {
+      // 409 → a sync is already running; show the server's friendly message.
+      setTriggerErr(e.status === 409 ? (e.serverMessage || 'A sync is already running. Please wait.') : e.message)
+      await load()
+    }
     setTriggering(false)
   }
 
   const last = st?.last_run_info
   const pct = run && run.total_rigs ? Math.round((run.rig_index / run.total_rigs) * 100) : 0
+  // A 'running' row with no live in-memory progress (e.g. after a server restart
+  // mid-run) — surface a simple banner so the operator knows a sync is active.
+  const runningMins = last?.status === 'running' && last.started_at
+    ? Math.max(0, Math.round((Date.now() - new Date(last.started_at).getTime()) / 60000))
+    : null
 
   return (
     <div className="card p-5">
@@ -1356,7 +1386,7 @@ function AutomatedSyncCard() {
         <div>
           <h3 className="text-sm font-semibold text-jdil-green mb-0.5">Automated Sync</h3>
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            Scheduled BC → staging sync for all 14 rigs. Promotion to po_orders runs only when enabled on the server.
+            Scheduled BC → staging sync for all 15 rigs. Promotion to po_orders runs only when enabled on the server.
           </p>
         </div>
         <button onClick={trigger} disabled={triggering || active}
@@ -1365,6 +1395,14 @@ function AutomatedSyncCard() {
           {active ? 'Sync running…' : triggering ? 'Starting…' : 'Run Sync Now'}
         </button>
       </div>
+
+      {/* Sync-in-progress banner (covers a running row with no live progress, e.g. after restart) */}
+      {runningMins !== null && !active && (
+        <div className="mt-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-400 text-xs font-medium rounded-lg px-3 py-2 flex items-center gap-2">
+          <div className="w-3.5 h-3.5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          ⚡ Sync in progress — started {runningMins} minute{runningMins === 1 ? '' : 's'} ago
+        </div>
+      )}
 
       {/* Promote-disabled safety banner */}
       {st && !st.promote_enabled && (
@@ -1395,7 +1433,7 @@ function AutomatedSyncCard() {
           <div className="text-[11px] text-gray-500 dark:text-gray-400">Last automated run</div>
           <div className="text-sm font-semibold text-gray-700 dark:text-gray-200">
             {last ? (
-              <span>{fmtDateTime(last.started_at)} <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] ${RUN_STATUS_BADGE[last.status] || ''}`}>{last.status}</span></span>
+              <span>{fmtDateTime(last.started_at)} <RunBadge status={last.status} className="ml-1 text-[10px]" /></span>
             ) : '—'}
           </div>
         </div>

@@ -95,10 +95,6 @@ async function fetchBlanketOrders({ rig_prefix, fiscal_years, label }) {
     all.push(...pageValue)
 
     console.log(`[bc-pagination] Rig ${rigTag} page ${page}: fetched ${pageValue.length} BOs (cumulative: ${all.length})`)
-    // ── TEMP DIAGNOSTICS (kept during pagination testing) ─────────────────────
-    console.log(`[bc-debug] fetched ${pageValue.length} entries from BC for ${rig_prefix} (page ${page})`)
-    if (page === 1) console.log(`[bc-debug] BC response data.value sample first entry:`, JSON.stringify(pageValue[0]).substring(0, 200))
-    // ──────────────────────────────────────────────────────────────────────────
 
     if (pageValue.length < BO_FETCH_TOP) break          // short page → natural end
     if (page >= BO_MAX_PAGES) { hitCap = true; break }   // safety cap → maybe more exist
