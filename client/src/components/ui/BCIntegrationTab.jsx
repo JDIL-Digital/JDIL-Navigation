@@ -1336,6 +1336,131 @@ function RecentRunsTable({ runs }) {
   )
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  LAST SYNC BANNER — prominent at-a-glance status at the top of the page
+// ═══════════════════════════════════════════════════════════════════════════════
+// Per-status visuals: coloured border + background + leading icon.
+const BANNER_STYLE = {
+  success:         { border: 'border-green-300 dark:border-green-700',  bg: 'bg-green-50 dark:bg-green-900/20',  icon: '✓',  iconCls: 'text-green-600 dark:text-green-400',  label: 'Success' },
+  partial_failure: { border: 'border-orange-300 dark:border-orange-700', bg: 'bg-orange-50 dark:bg-orange-900/20', icon: '⚠️', iconCls: 'text-orange-600 dark:text-orange-400', label: 'Partial Failure' },
+  failed:          { border: 'border-red-300 dark:border-red-700',      bg: 'bg-red-50 dark:bg-red-900/20',      icon: '❌', iconCls: 'text-red-600 dark:text-red-400',      label: 'Failed' },
+  timeout:         { border: 'border-red-300 dark:border-red-700',      bg: 'bg-red-50 dark:bg-red-900/20',      icon: '⏱️', iconCls: 'text-red-600 dark:text-red-400',      label: 'Timeout' },
+  running:         { border: 'border-blue-300 dark:border-blue-700',    bg: 'bg-blue-50 dark:bg-blue-900/20',    icon: '⚡', iconCls: 'text-blue-600 dark:text-blue-400',    label: 'Running' },
+  stale:           { border: 'border-gray-300 dark:border-gray-700',    bg: 'bg-gray-50 dark:bg-gray-800/60',    icon: '⚪', iconCls: 'text-gray-500 dark:text-gray-400',    label: 'Stale' },
+  none:            { border: 'border-gray-300 dark:border-gray-700',    bg: 'bg-gray-50 dark:bg-gray-800/60',    icon: 'ℹ️', iconCls: 'text-gray-500 dark:text-gray-400',    label: 'No runs' },
+}
+
+// Humanised "time since" per spec: just now / X minutes / X hours / X days / date.
+function timeAgo(d) {
+  if (!d) return ''
+  const diff = Date.now() - new Date(d).getTime()
+  if (diff < 60_000) return 'just now'
+  const mins = Math.floor(diff / 60_000)
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`
+  try { return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) }
+  catch { return fmtDateTime(d) }
+}
+
+const fmtNum = n => (n == null ? '—' : Number(n).toLocaleString('en-IN'))
+
+function LastSyncBanner({ onOpenRun }) {
+  const [cron, setCron]     = useState(null)        // /cron-status payload (live running progress)
+  const [latest, setLatest] = useState(undefined)   // undefined = loading, null = no runs, else latest run row
+
+  async function load() {
+    const [c, h] = await Promise.allSettled([
+      biApi('/cron-status'),
+      biApi('/sync-history?days=90&per_page=1&page=1'),
+    ])
+    if (c.status === 'fulfilled') setCron(c.value)
+    if (h.status === 'fulfilled') setLatest(h.value.runs?.[0] || null)
+    else setLatest(prev => (prev === undefined ? null : prev))
+  }
+  useEffect(() => {
+    load()
+    const id = setInterval(load, 15000)   // poll every 15s
+    return () => clearInterval(id)
+  }, [])
+
+  const running = cron?.current_run || null
+
+  // Loading skeleton (first paint, nothing known yet).
+  if (!running && latest === undefined) {
+    return (
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 px-4 py-3 flex items-center gap-2 text-sm text-gray-400 dark:text-gray-500">
+        <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+        Loading last sync status…
+      </div>
+    )
+  }
+
+  // ── Running state (live progress from /cron-status) ──────────────────────────
+  if (running) {
+    const s = BANNER_STYLE.running
+    return (
+      <button onClick={() => onOpenRun?.(running.sync_run_id)}
+        className={`w-full text-left rounded-xl border ${s.border} ${s.bg} px-4 py-3 transition hover:brightness-[1.02]`}>
+        <div className="flex items-center gap-2 text-sm font-semibold text-blue-700 dark:text-blue-400">
+          <span className="text-base animate-pulse">{s.icon}</span>
+          Sync in progress — started {timeAgo(running.started_at)}
+        </div>
+        <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+          Status: <span className="font-medium">Running</span>
+          {running.total_rigs ? <> · Rig {running.rig_index} of {running.total_rigs}: <span className="font-mono">{running.current_rig || '…'}</span></> : null}
+          <span className="text-gray-400"> · tap for details</span>
+        </div>
+      </button>
+    )
+  }
+
+  // ── No runs yet ──────────────────────────────────────────────────────────────
+  if (!latest) {
+    const s = BANNER_STYLE.none
+    return (
+      <div className={`rounded-xl border ${s.border} ${s.bg} px-4 py-3`}>
+        <div className="flex items-center gap-2 text-sm font-semibold text-gray-600 dark:text-gray-300">
+          <span className="text-base">{s.icon}</span> No sync runs yet
+        </div>
+        <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Click "Run Sync Now" below to start the first sync.</div>
+      </div>
+    )
+  }
+
+  // ── Last completed/failed run ────────────────────────────────────────────────
+  const s = BANNER_STYLE[latest.status] || BANNER_STYLE.none
+  const { attempted, completed } = rigCounts(latest)
+  const isHealthy = latest.status === 'success'
+  const isError   = ['failed', 'timeout'].includes(latest.status)
+
+  return (
+    <button onClick={() => onOpenRun?.(latest.id)}
+      className={`w-full text-left rounded-xl border ${s.border} ${s.bg} px-4 py-3 transition hover:brightness-[1.02]`}>
+      <div className={`flex items-center gap-2 text-sm font-semibold ${s.iconCls}`}>
+        <span className="text-base">{s.icon}</span>
+        Last Sync: {fmtDateTime(latest.started_at)} <span className="font-normal text-gray-500 dark:text-gray-400">({timeAgo(latest.started_at)})</span>
+        {!isHealthy && <span className="font-normal"> — {s.label}</span>}
+      </div>
+      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+        <span>Status: <RunBadge status={latest.status} className="text-[10px]" /></span>
+        <span className="text-gray-300 dark:text-gray-600">|</span>
+        <span>Rigs: <span className="font-medium">{attempted ? `${completed}/${attempted}` : '—'}</span></span>
+        <span className="text-gray-300 dark:text-gray-600">|</span>
+        <span>POs: <span className="font-medium">{fmtNum(latest.total_pos_processed)}</span></span>
+        <span className="text-gray-300 dark:text-gray-600">|</span>
+        <span>Promoted: <span className="font-medium">{fmtNum(latest.pos_promoted ?? 0)}</span></span>
+        <span className="text-gray-400"> · tap for details</span>
+      </div>
+      {isError && latest.error_message && (
+        <div className="text-xs text-red-600 dark:text-red-400 mt-1">Error: {latest.error_message}</div>
+      )}
+    </button>
+  )
+}
+
 // ── Automated Sync (cron) status + manual trigger ──────────────────────────────
 function AutomatedSyncCard({ onViewHistory }) {
   const [st, setSt]       = useState(null)   // cron-status payload
@@ -2083,8 +2208,8 @@ function rigCounts(run) {
 
 // One expandable history row. Detail reveals per-rig breakdown, errors,
 // truncation warnings, promote-skip reason, and a link to this run's staging rows.
-function HistoryRow({ run, onViewStaging }) {
-  const [open, setOpen] = useState(false)
+function HistoryRow({ run, onViewStaging, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
   const rigs      = Array.isArray(run.rig_results) ? run.rig_results : []
   const truncated = Array.isArray(run.truncation_warnings) ? run.truncation_warnings : []
   const { attempted, completed } = rigCounts(run)
@@ -2179,7 +2304,7 @@ function HistoryRow({ run, onViewStaging }) {
   )
 }
 
-function SyncHistorySub({ onViewStaging }) {
+function SyncHistorySub({ onViewStaging, initialExpandRunId = '' }) {
   const [data, setData]       = useState(null)   // full /sync-history payload
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState('')
@@ -2272,7 +2397,7 @@ function SyncHistorySub({ onViewStaging }) {
                 <th className="table-header text-right pr-4">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                {runs.map(run => <HistoryRow key={run.id} run={run} onViewStaging={onViewStaging} />)}
+                {runs.map(run => <HistoryRow key={run.id} run={run} onViewStaging={onViewStaging} defaultOpen={!!initialExpandRunId && run.id === initialExpandRunId} />)}
               </tbody>
             </table>
           </div></div>
@@ -2305,8 +2430,12 @@ const SUB_TABS = ['Rig Mapping', 'Buyer Mapping', 'Buyer Aliases', 'Data Quality
 export default function BCIntegrationTab() {
   const [sub, setSub] = useState(0)
   const [stagingRunId, setStagingRunId] = useState('')
+  const [historyExpandId, setHistoryExpandId] = useState('')
   return (
     <div className="space-y-4">
+      {/* Last-sync status banner — prominent, at the very top */}
+      <LastSyncBanner onOpenRun={id => { setHistoryExpandId(id); setSub(5) }} />
+
       {/* Connection test (above the sub-tabs) */}
       <BCConnectionTest />
 
@@ -2341,7 +2470,7 @@ export default function BCIntegrationTab() {
       {sub === 2 && <AliasesSub />}
       {sub === 3 && <AlertsSub />}
       {sub === 4 && <StagingRowsSub initialRunId={stagingRunId} />}
-      {sub === 5 && <SyncHistorySub onViewStaging={id => { setStagingRunId(id); setSub(4) }} />}
+      {sub === 5 && <SyncHistorySub onViewStaging={id => { setStagingRunId(id); setSub(4) }} initialExpandRunId={historyExpandId} />}
     </div>
   )
 }
