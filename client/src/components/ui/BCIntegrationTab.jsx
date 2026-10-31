@@ -1337,7 +1337,7 @@ function RecentRunsTable({ runs }) {
 }
 
 // ── Automated Sync (cron) status + manual trigger ──────────────────────────────
-function AutomatedSyncCard() {
+function AutomatedSyncCard({ onViewHistory }) {
   const [st, setSt]       = useState(null)   // cron-status payload
   const [loadErr, setLoadErr]   = useState('')
   const [triggering, setTriggering] = useState(false)
@@ -1436,6 +1436,9 @@ function AutomatedSyncCard() {
               <span>{fmtDateTime(last.started_at)} <RunBadge status={last.status} className="ml-1 text-[10px]" /></span>
             ) : '—'}
           </div>
+          <button onClick={() => onViewHistory?.()} className="text-[11px] text-jdil-green hover:underline font-medium mt-1">
+            View all sync history →
+          </button>
         </div>
       </div>
 
@@ -2043,9 +2046,261 @@ function StagingRowsSub({ initialRunId = '' }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  SUB-TAB 6 — SYNC HISTORY (paginated, filterable view of bc_sync_runs)
+// ═══════════════════════════════════════════════════════════════════════════════
+const HISTORY_STATUS_FILTERS = [
+  { value: '',                label: 'All statuses' },
+  { value: 'success',         label: '✓ Success' },
+  { value: 'partial_failure', label: '⚠️ Partial Failure' },
+  { value: 'failed',          label: '❌ Failed' },
+  { value: 'timeout',         label: '⏱️ Timeout' },
+  { value: 'running',         label: '⚡ Running' },
+]
+const HISTORY_TRIGGER_FILTERS = [
+  { value: '',         label: 'All triggers' },
+  { value: 'manual',   label: '👤 Manual' },
+  { value: 'cron-9am', label: '🕘 Cron 9am' },
+  { value: 'cron-6pm', label: '🕕 Cron 6pm' },
+]
+const HISTORY_DATE_FILTERS = [
+  { value: 7,  label: 'Last 7 days' },
+  { value: 30, label: 'Last 30 days' },
+  { value: 90, label: 'All (last 90 days)' },
+]
+
+// Rigs attempted/completed for a run. Master cron runs carry rig_results (v28);
+// single-rig manual syncs don't, so fall back to the overall status.
+function rigCounts(run) {
+  const rigs = Array.isArray(run.rig_results) ? run.rig_results : []
+  if (rigs.length) {
+    return { attempted: rigs.length, completed: rigs.filter(r => r.status !== 'failed').length }
+  }
+  const attempted = run.rig_filter && run.rig_filter !== 'ALL' ? 1 : (run.rig_filter === 'ALL' ? 0 : 1)
+  const failed    = ['failed', 'timeout'].includes(run.status)
+  const running   = ['running', 'stale'].includes(run.status)
+  return { attempted, completed: running ? 0 : (failed ? 0 : attempted) }
+}
+
+// One expandable history row. Detail reveals per-rig breakdown, errors,
+// truncation warnings, promote-skip reason, and a link to this run's staging rows.
+function HistoryRow({ run, onViewStaging }) {
+  const [open, setOpen] = useState(false)
+  const rigs      = Array.isArray(run.rig_results) ? run.rig_results : []
+  const truncated = Array.isArray(run.truncation_warnings) ? run.truncation_warnings : []
+  const { attempted, completed } = rigCounts(run)
+  const skipReasons = [...new Set(rigs.filter(r => r.promote_skipped && r.promote_skip_reason).map(r => r.promote_skip_reason))]
+
+  return (
+    <>
+      <tr className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+        <td className="table-cell text-xs whitespace-nowrap">
+          <button onClick={() => setOpen(o => !o)} className="text-gray-500 hover:text-jdil-green mr-1" title={open ? 'Collapse' : 'View details'}>
+            <span className={`inline-block transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>
+          </button>
+          {fmtDateTime(run.started_at)}
+        </td>
+        <td className="table-cell text-xs whitespace-nowrap">{triggerLabel(run)}</td>
+        <td className="table-cell text-xs text-center whitespace-nowrap">
+          {attempted ? <>{completed}<span className="text-gray-400"> / {attempted}</span></> : '—'}
+        </td>
+        <td className="table-cell text-xs text-center">{run.total_pos_processed ?? '—'}</td>
+        <td className="table-cell text-xs text-center">{run.staging_rows_inserted ?? 0}</td>
+        <td className="table-cell text-xs">
+          <RunBadge status={run.status} />
+          {truncated.length > 0 && (
+            <span className="ml-1 rounded-full px-2 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 whitespace-nowrap"
+              title={`These rigs returned a full page — possible truncation: ${truncated.join(', ')}`}>⚠️ Truncation</span>
+          )}
+        </td>
+        <td className="table-cell text-xs whitespace-nowrap">{run.processing_time_ms != null ? `${(run.processing_time_ms / 1000).toFixed(1)}s` : '—'}</td>
+        <td className="table-cell text-xs text-right pr-4">
+          <button onClick={() => setOpen(o => !o)} className="text-xs border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 px-2.5 py-1 rounded-md">
+            {open ? 'Hide' : 'View Details'}
+          </button>
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={8} className="bg-gray-50 dark:bg-gray-900/40 px-6 py-3">
+            {/* Per-rig breakdown */}
+            {rigs.length > 0 ? (
+              <>
+                <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">Per-rig breakdown ({rigs.length} rigs)</p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-1">
+                  {rigs.map((r, i) => (
+                    <div key={i} className="text-xs flex items-center gap-1.5">
+                      <span className={RIG_RESULT_DOT[r.status] || 'text-gray-400'}>●</span>
+                      <span className="font-mono">{r.rig}</span>
+                      {truncated.includes(r.rig) && (
+                        <span className="text-orange-600 dark:text-orange-400 whitespace-nowrap" title="Returned a full page — may be truncated">⚠️ {r.bo_count ?? 'full'} BOs</span>
+                      )}
+                      <span className="text-gray-500 dark:text-gray-400">
+                        {r.staging_rows ?? 0} staged{r.pos_promoted ? `, ${r.pos_promoted} promoted` : ''}{r.error ? ` — ${r.error}` : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Single-rig sync ({run.rig_filter || '—'}) — no per-rig breakdown recorded.
+              </p>
+            )}
+
+            {/* Truncation warnings */}
+            {truncated.length > 0 && (
+              <p className="text-xs text-orange-600 dark:text-orange-400 mt-2">
+                ⚠️ Possible truncation on: <span className="font-mono">{truncated.join(', ')}</span> (returned a full page — data may be incomplete).
+              </p>
+            )}
+
+            {/* Promote skip reason */}
+            {skipReasons.length > 0 && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                Promotion skipped: {skipReasons.join('; ')} (staged for review only).
+              </p>
+            )}
+
+            {/* Error message */}
+            {run.error_message && (
+              <p className="text-xs text-red-600 dark:text-red-400 mt-2">Error: {run.error_message}</p>
+            )}
+
+            {/* Link to staging rows for this run */}
+            <div className="mt-3">
+              <button onClick={() => onViewStaging?.(run.id)} className="text-xs text-jdil-green hover:underline font-medium">
+                View staging rows from this run →
+              </button>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+function SyncHistorySub({ onViewStaging }) {
+  const [data, setData]       = useState(null)   // full /sync-history payload
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState('')
+  const [statusFilter, setStatusFilter]   = useState('')
+  const [triggerFilter, setTriggerFilter] = useState('')
+  const [days, setDays]       = useState(7)
+  const [page, setPage]       = useState(1)
+
+  async function load() {
+    setLoading(true); setError('')
+    try {
+      const qs = new URLSearchParams({ days: String(days), page: String(page), per_page: '20' })
+      if (statusFilter)  qs.set('status', statusFilter)
+      if (triggerFilter) qs.set('trigger', triggerFilter)
+      setData(await biApi(`/sync-history?${qs.toString()}`))
+    } catch (e) { setError(e.message) }
+    setLoading(false)
+  }
+  // Reload whenever filters/page change. Reset to page 1 when a filter changes.
+  useEffect(() => { load() }, [statusFilter, triggerFilter, days, page])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setPage(1) }, [statusFilter, triggerFilter, days])
+
+  const stats = data?.stats
+  const runs  = data?.runs || []
+  const pg    = data?.pagination
+
+  return (
+    <div className="space-y-4">
+      {/* Header stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+        <div className="rounded-lg px-3 py-2 bg-green-50 dark:bg-green-900/20">
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">Last successful run</div>
+          <div className="text-sm font-semibold text-green-700 dark:text-green-400">{stats?.last_successful ? fmtDateTime(stats.last_successful.started_at) : '—'}</div>
+        </div>
+        <div className="rounded-lg px-3 py-2 bg-red-50 dark:bg-red-900/20">
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">Last failed run</div>
+          <div className="text-sm font-semibold text-red-700 dark:text-red-400" title={stats?.last_failed?.error_message || ''}>
+            {stats?.last_failed ? fmtDateTime(stats.last_failed.started_at) : '—'}
+          </div>
+        </div>
+        <div className="rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-800/60">
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">Total runs ({days}d)</div>
+          <div className="text-lg font-bold leading-none text-gray-700 dark:text-gray-200 mt-1">{stats ? stats.total_runs : '—'}</div>
+        </div>
+        <div className="rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-800/60">
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">Success rate ({days}d)</div>
+          <div className="text-lg font-bold leading-none text-gray-700 dark:text-gray-200 mt-1">{stats ? `${Math.round(stats.success_rate * 100)}%` : '—'}</div>
+        </div>
+      </div>
+
+      {/* Filter bar */}
+      <div className="flex items-end gap-2 flex-wrap">
+        <div>
+          <label className="label">Status</label>
+          <select className="input-field w-auto min-w-[160px]" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+            {HISTORY_STATUS_FILTERS.map(f => <option key={f.value || 'all'} value={f.value}>{f.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Trigger</label>
+          <select className="input-field w-auto min-w-[150px]" value={triggerFilter} onChange={e => setTriggerFilter(e.target.value)}>
+            {HISTORY_TRIGGER_FILTERS.map(f => <option key={f.value || 'all'} value={f.value}>{f.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Date range</label>
+          <select className="input-field w-auto min-w-[150px]" value={days} onChange={e => setDays(Number(e.target.value))}>
+            {HISTORY_DATE_FILTERS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+          </select>
+        </div>
+        <button onClick={load} className="btn-secondary text-sm ml-auto" disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
+      </div>
+
+      <ErrorBanner error={error} onRetry={load} />
+
+      {loading ? <Spinner /> : runs.length === 0 ? (
+        <p className="text-center py-12 text-sm text-gray-400">No sync runs match these filters.</p>
+      ) : (
+        <>
+          <div className="card overflow-hidden"><div className="overflow-x-auto">
+            <table className="w-full min-w-[860px]">
+              <thead><tr className="border-b border-gray-200 dark:border-gray-800">
+                <th className="table-header">Started</th>
+                <th className="table-header">Trigger</th>
+                <th className="table-header text-center">Rigs done / tried</th>
+                <th className="table-header text-center">POs processed</th>
+                <th className="table-header text-center">Rows inserted</th>
+                <th className="table-header">Status</th>
+                <th className="table-header">Duration</th>
+                <th className="table-header text-right pr-4">Actions</th>
+              </tr></thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                {runs.map(run => <HistoryRow key={run.id} run={run} onViewStaging={onViewStaging} />)}
+              </tbody>
+            </table>
+          </div></div>
+
+          {/* Pagination */}
+          {pg && (
+            <div className="flex items-center justify-between gap-3 flex-wrap text-sm">
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Page {pg.page} of {pg.total_pages} · {pg.total} run{pg.total !== 1 ? 's' : ''} total
+              </p>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={pg.page <= 1 || loading}
+                  className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-50">← Prev</button>
+                <button onClick={() => setPage(p => Math.min(pg.total_pages, p + 1))} disabled={pg.page >= pg.total_pages || loading}
+                  className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-50">Next →</button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  MAIN — BC INTEGRATION TAB
 // ═══════════════════════════════════════════════════════════════════════════════
-const SUB_TABS = ['Rig Mapping', 'Buyer Mapping', 'Buyer Aliases', 'Data Quality Alerts', 'Staging Rows']
+const SUB_TABS = ['Rig Mapping', 'Buyer Mapping', 'Buyer Aliases', 'Data Quality Alerts', 'Staging Rows', '⏱ Sync History']
 
 export default function BCIntegrationTab() {
   const [sub, setSub] = useState(0)
@@ -2062,7 +2317,7 @@ export default function BCIntegrationTab() {
       <PreviewSyncCard />
 
       {/* Automated sync (cron) status + manual trigger (above Sync to Staging) */}
-      <AutomatedSyncCard />
+      <AutomatedSyncCard onViewHistory={() => setSub(5)} />
 
       {/* Rate limiter status + self-test (below Automated Sync, above Sync to Staging) */}
       <RateLimiterStatusCard />
@@ -2086,6 +2341,7 @@ export default function BCIntegrationTab() {
       {sub === 2 && <AliasesSub />}
       {sub === 3 && <AlertsSub />}
       {sub === 4 && <StagingRowsSub initialRunId={stagingRunId} />}
+      {sub === 5 && <SyncHistorySub onViewStaging={id => { setStagingRunId(id); setSub(4) }} />}
     </div>
   )
 }

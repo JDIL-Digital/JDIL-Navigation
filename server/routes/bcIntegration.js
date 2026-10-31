@@ -564,6 +564,82 @@ router.get('/sync-runs', async (_req, res) => {
   res.json(data || [])
 })
 
+// ─── GET /api/admin/bc-integration/sync-history ───────────────────────────────
+//   ?status=success,failed   &trigger=manual|cron-9am|cron-6pm
+//   &days=7 (default, max 90) &page=1 &per_page=20 (max 100)
+// Paginated, filterable view of bc_sync_runs for the Sync History sub-tab.
+// Read-only; never touches po_orders. Header stats are computed over the date
+// window only (they ignore the status/trigger filters) so the success rate stays
+// meaningful regardless of what the table is filtered to.
+router.get('/sync-history', async (req, res) => {
+  try {
+    const days     = Math.min(Math.max(parseInt(req.query.days, 10)     || 7, 1),  90)
+    const page     = Math.max(parseInt(req.query.page, 10)     || 1, 1)
+    const per_page = Math.min(Math.max(parseInt(req.query.per_page, 10) || 20, 1), 100)
+    const cutoffISO = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+
+    const statusList = String(req.query.status || '').split(',').map(s => s.trim()).filter(Boolean)
+    const trigger    = String(req.query.trigger || '').trim()   // '' | manual | cron-9am | cron-6pm
+
+    // Shared table filters (date window + optional status + optional trigger).
+    const applyFilters = q => {
+      q = q.gte('started_at', cutoffISO)
+      if (statusList.length) q = q.in('status', statusList)
+      if (trigger === 'manual')        q = q.or('trigger_source.ilike.manual*,and(trigger_source.is.null,triggered_by.not.is.null)')
+      else if (trigger === 'cron-9am') q = q.eq('trigger_source', 'cron-9am')
+      else if (trigger === 'cron-6pm') q = q.eq('trigger_source', 'cron-6pm')
+      return q
+    }
+
+    // Page of runs (full rows — rig_results, truncation_warnings, etc. are needed to expand).
+    const from = (page - 1) * per_page
+    const { data: runs, count, error } = await applyFilters(
+      supabase.from('bc_sync_runs').select('*', { count: 'exact' })
+        .order('started_at', { ascending: false }).range(from, from + per_page - 1)
+    )
+    if (error) return res.status(500).json({ success: false, error: error.message })
+
+    const total       = count || 0
+    const total_pages = Math.max(1, Math.ceil(total / per_page))
+
+    // Header stats over the date window only.
+    const windowCount = async extra => {
+      let q = supabase.from('bc_sync_runs').select('id', { count: 'exact', head: true }).gte('started_at', cutoffISO)
+      if (extra) q = extra(q)
+      const { count } = await q
+      return count || 0
+    }
+    const [total_window, success_window, finished_window, lastSucc, lastFail] = await Promise.all([
+      windowCount(),
+      windowCount(q => q.eq('status', 'success')),
+      windowCount(q => q.not('status', 'in', '(running,stale)')),
+      supabase.from('bc_sync_runs').select('id, started_at, status')
+        .eq('status', 'success').gte('started_at', cutoffISO)
+        .order('started_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('bc_sync_runs').select('id, started_at, status, error_message')
+        .in('status', ['failed', 'timeout']).gte('started_at', cutoffISO)
+        .order('started_at', { ascending: false }).limit(1).maybeSingle(),
+    ])
+
+    const success_rate = finished_window > 0 ? +(success_window / finished_window).toFixed(2) : 0
+
+    res.json({
+      success: true,
+      stats: {
+        last_successful: lastSucc.data || null,
+        last_failed:     lastFail.data || null,
+        total_runs:      total_window,
+        success_rate,
+      },
+      runs: runs || [],
+      pagination: { page, per_page, total, total_pages },
+    })
+  } catch (e) {
+    console.error('[bc-sync-history] FAILED:', e.message)
+    res.status(500).json({ success: false, error: e.message })
+  }
+})
+
 // ─── GET /api/admin/bc-integration/cron-status ────────────────────────────────
 // Scheduler state for the "Automated Sync" card: enabled, next run, last run,
 // and live progress of an in-flight run.
