@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
+import { fetchAllRows } from '../utils/supabaseHelpers'
 import POTable from '../components/ui/POTable'
 import PODetailPanel from '../components/ui/PODetailPanel'
 import POFilterBar from '../components/ui/POFilterBar'
@@ -15,10 +16,9 @@ export default function LogisticsPage() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase
-      .from('po_orders')
-      .select('*')
-      .order('updated_at', { ascending: false })
+    const data = await fetchAllRows(
+      supabase.from('po_orders').select('*').order('updated_at', { ascending: false })
+    )
     setOrders(data || [])
     setLoading(false)
   }

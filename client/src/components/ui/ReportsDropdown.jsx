@@ -6,6 +6,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
+import { fetchAllRows } from '../../utils/supabaseHelpers'
 import { useAuth } from '../../context/AuthContext'
 import {
   generateWeeklyReport,
@@ -83,12 +84,14 @@ export default function ReportsDropdown() {
       // Always fetch a FRESH, complete dataset on every click — never cached.
       // Line items are fetched too so reports can fall back to a line item's
       // material description when material_description_2 is empty.
-      const [{ data: orders, error: fetchErr }, { data: items, error: itemsErr }] = await Promise.all([
-        supabase.from('po_orders').select('*').order('po_date', { ascending: false }),
-        supabase.from('po_line_items').select('po_id, material_description, created_at').order('created_at', { ascending: true }),
+      const [ordersRes, itemsRes] = await Promise.allSettled([
+        fetchAllRows(supabase.from('po_orders').select('*').order('po_date', { ascending: false })),
+        fetchAllRows(supabase.from('po_line_items').select('po_id, material_description, created_at').order('created_at', { ascending: true })),
       ])
-      if (fetchErr) throw fetchErr
-      if (itemsErr) console.warn('Report line-items fetch failed (non-critical):', itemsErr.message)
+      if (ordersRes.status === 'rejected') throw ordersRes.reason
+      const orders = ordersRes.value
+      if (itemsRes.status === 'rejected') console.warn('Report line-items fetch failed (non-critical):', itemsRes.reason?.message)
+      const items = itemsRes.status === 'fulfilled' ? itemsRes.value : []
 
       // First (earliest) line item material per PO.
       const firstMaterialByPo = new Map()

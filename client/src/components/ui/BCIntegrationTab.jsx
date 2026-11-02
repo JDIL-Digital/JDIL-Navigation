@@ -2074,7 +2074,7 @@ function StagingRowsSub({ initialRunId = '' }) {
             <div>
               <label className="label">Batch Size</label>
               <select className="input-field w-auto min-w-[120px]" value={batchSize} onChange={e => setBatchSize(e.target.value)} disabled={promoting}>
-                {['1', '5', '10', '25', '50', 'all'].map(b => <option key={b} value={b}>{b === 'all' ? 'All remaining' : b}</option>)}
+                {['1', '5', '10', '25', '50', '100', '250', '500', '1000', 'all'].map(b => <option key={b} value={b}>{b === 'all' ? 'All remaining' : b}</option>)}
               </select>
             </div>
             <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-700 dark:text-gray-300 pb-2">
@@ -2089,6 +2089,7 @@ function StagingRowsSub({ initialRunId = '' }) {
             </button>
             {!runFilter && <span className="text-xs text-gray-400 dark:text-gray-500 pb-2">Select a Sync Run below first.</span>}
           </div>
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2">Larger batches = faster but longer transaction. 500 recommended for mass promote.</p>
 
           {promoteErr && <p className="text-xs text-red-600 dark:text-red-400 mt-2">{promoteErr}</p>}
 

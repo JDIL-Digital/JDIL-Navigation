@@ -5,6 +5,7 @@ import {
   LineChart, Line, PieChart, Pie, Legend, LabelList,
 } from 'recharts'
 import { supabase } from '../lib/supabase'
+import { fetchAllRows } from '../utils/supabaseHelpers'
 import { useAuth } from '../context/AuthContext'
 import { calcStatus, daysElapsed, overdueDays, isPurchaseStale, isDeliveryStale } from '../utils/helpers'
 import { PO_RIG_OPTIONS, OVERDUE_DAYS, LOGISTICS_LOCATION_GROUPS, PURCHASE_STAGES, LOGISTICS_STAGES } from '../utils/constants'
@@ -104,12 +105,13 @@ export default function Dashboard() {
       if (profile?.role === 'rig' && profile?.rig_name) {
         q = q.eq('rig_name', profile.rig_name)
       }
-      const [{ data, error }, { data: items, error: itemsErr }] = await Promise.all([
-        q,
-        supabase.from('po_line_items').select('id, po_id, quantity_ordered, quantity_delivered, item_status'),
-      ])
-      if (error)    console.error('Dashboard fetch error:', error)
-      if (itemsErr) console.error('Dashboard line items fetch error:', itemsErr)
+      const itemsQuery = supabase.from('po_line_items').select('id, po_id, quantity_ordered, quantity_delivered, item_status')
+      let data = [], items = []
+      try {
+        [data, items] = await Promise.all([fetchAllRows(q), fetchAllRows(itemsQuery)])
+      } catch (err) {
+        console.error('Dashboard fetch error:', err)
+      }
       setOrders(data || [])
       setLineItems(items || [])
       // Reverse logistics jobs (via server — respects rig scoping)

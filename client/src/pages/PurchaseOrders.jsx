@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { fetchAllRows } from '../utils/supabaseHelpers'
 import { useAuth } from '../context/AuthContext'
 import { calcStatus, isPurchaseStale, isDeliveryStale } from '../utils/helpers'
 import { OVERDUE_DAYS } from '../utils/constants'
@@ -66,10 +67,8 @@ export default function PurchaseOrders() {
     let q = supabase.from('po_orders').select('*').order('updated_at', { ascending: false })
     if (profile?.role === 'purchase' && profile?.team_code)
       q = q.eq('buyer_code', profile.team_code)
-    const [{ data }, { data: items }] = await Promise.all([
-      q,
-      supabase.from('po_line_items').select('po_id, quantity_pending'),
-    ])
+    const itemsQuery = supabase.from('po_line_items').select('po_id, quantity_pending')
+    const [data, items] = await Promise.all([fetchAllRows(q), fetchAllRows(itemsQuery)])
     setOrders(data || [])
     setPendingItemPoIds(new Set((items || []).filter(it => Number(it.quantity_pending) > 0).map(it => it.po_id)))
     setLoading(false)

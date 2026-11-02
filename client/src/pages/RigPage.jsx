@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
+import { fetchAllRows } from '../utils/supabaseHelpers'
 import { useAuth } from '../context/AuthContext'
 import { calcStatus } from '../utils/helpers'
 import POTable from '../components/ui/POTable'
@@ -21,7 +22,7 @@ export default function RigPage() {
     let q = supabase.from('po_orders').select('*').order('updated_at', { ascending: false })
     if (profile?.role === 'rig' && profile?.rig_name)
       q = q.eq('rig_name', profile.rig_name)
-    const { data } = await q
+    const data = await fetchAllRows(q)
     setOrders(data || [])
     setLoading(false)
   }
