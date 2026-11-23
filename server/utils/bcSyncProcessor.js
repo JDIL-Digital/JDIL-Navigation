@@ -11,6 +11,7 @@ const {
   extractRigPrefix,
   lookupRigName,
   lookupBuyerCode,
+  loadMappingCaches,
   transformLinkedOrder,
   processReceiptHeaders,
   parseDate,
@@ -111,9 +112,9 @@ async function logEmptyBuyer(bcDocumentNo, supabaseAdmin) {
  * @param {import('@supabase/supabase-js').SupabaseClient} supabaseAdmin
  * @returns {Promise<object>} per-BO result (see shape below)
  */
-async function processSingleBlanketOrder(bcBO, supabaseAdmin) {
+async function processSingleBlanketOrder(bcBO, supabaseAdmin, cache = null) {
   const rig_prefix = extractRigPrefix(bcBO.documentNo)
-  const rigLookup  = await lookupRigName(rig_prefix, supabaseAdmin)
+  const rigLookup  = await lookupRigName(rig_prefix, supabaseAdmin, cache)
   const rig_name   = rigLookup.rig_name
   const rig_matched = rigLookup.matched
   const rig_unknown_warning = rig_matched ? null : `Unknown prefix: ${rig_prefix ?? '(none)'}`
@@ -124,7 +125,7 @@ async function processSingleBlanketOrder(bcBO, supabaseAdmin) {
 
   for (const line of (Array.isArray(bcBO.blanketLines) ? bcBO.blanketLines : [])) {
     for (const po of (Array.isArray(line.linkedOrders) ? line.linkedOrders : [])) {
-      const buyer_lookup = await lookupBuyerCode(po.BuyerCode, supabaseAdmin)
+      const buyer_lookup = await lookupBuyerCode(po.BuyerCode, supabaseAdmin, cache)
       if (buyer_lookup.matched) {
         buyers_matched++
       } else {
@@ -188,12 +189,16 @@ async function previewSync(bcData, supabaseAdmin) {
   const started = Date.now()
   const bos = Array.isArray(bcData?.value) ? bcData.value : (Array.isArray(bcData) ? bcData : [])
 
+  // Load the 3 mapping tables ONCE for the whole fetch, then resolve every
+  // rig/buyer lookup from memory instead of re-querying per PO.
+  const cache = await loadMappingCaches(supabaseAdmin)
+
   const blanket_orders = []
   let total_pos = 0, bos_within_sync_range = 0, bos_before_cutoff = 0
   const unknownRigs = new Set(), unknownBuyers = new Set()
 
   for (const bo of bos) {
-    const result = await processSingleBlanketOrder(bo, supabaseAdmin)
+    const result = await processSingleBlanketOrder(bo, supabaseAdmin, cache)
     blanket_orders.push(result)
     total_pos += result.summary.total_pos
 

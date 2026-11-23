@@ -38,8 +38,21 @@ function extractRigPrefix(documentNo) {
  * @param {import('@supabase/supabase-js').SupabaseClient} supabaseAdmin
  * @returns {Promise<{ rig_name: string|null, matched: boolean, unknown_prefix?: string|null }>}
  */
-async function lookupRigName(bcPrefix, supabaseAdmin) {
+async function lookupRigName(bcPrefix, supabaseAdmin, cache = null) {
   if (!bcPrefix) return { rig_name: null, matched: false, unknown_prefix: bcPrefix || null }
+
+  // Fast path: resolve from the in-memory cache (loaded once per sync run via
+  // loadMappingCaches). Mirrors the DB query — exact prefix match among active
+  // rows, longest prefix_length first.
+  if (cache && Array.isArray(cache.rigs)) {
+    const match = cache.rigs
+      .filter(r => r.bc_prefix === bcPrefix && r.active !== false)
+      .sort((a, b) => (b.prefix_length || 0) - (a.prefix_length || 0))[0]
+    if (!match) return { rig_name: null, matched: false, unknown_prefix: bcPrefix }
+    return { rig_name: match.jdil_rig_name, matched: true }
+  }
+
+  // Fallback: per-call DB query (backward compatible — no cache supplied).
   const { data, error } = await supabaseAdmin
     .from('bc_rig_mapping')
     .select('jdil_rig_name')
@@ -86,15 +99,19 @@ function normalizeBuyerCode(code) {
  *   { jdil_code, full_name, matched:true, confidence:100, via_alias:true }
  *   { jdil_code:'ACCOUNTS', full_name:'Accounts (<bcValue>)', matched:false, auto_assigned_to_accounts:true, bc_value:<bcBuyerCode> }
  */
-async function lookupBuyerCode(bcBuyerCode, supabaseAdmin) {
+async function lookupBuyerCode(bcBuyerCode, supabaseAdmin, cache = null) {
   const normInput = normalizeBuyerCode(bcBuyerCode)
   if (!normInput) return { jdil_code: 'ACCOUNTS', full_name: 'Accounts (unassigned)', matched: false, is_empty: true, auto_assigned_to_accounts: true }
 
   // Compare against all active buyer mappings on their normalized forms.
-  const { data: buyers } = await supabaseAdmin
-    .from('bc_buyer_mapping')
-    .select('bc_buyer_code, jdil_buyer_code, full_name')
-    .eq('active', true)
+  // Source rows from the in-memory cache (loaded once per sync run) when
+  // available, else fall back to a per-call DB read (backward compatible).
+  const buyers = (cache && Array.isArray(cache.buyers))
+    ? cache.buyers.filter(b => b.active !== false)
+    : (await supabaseAdmin
+        .from('bc_buyer_mapping')
+        .select('bc_buyer_code, jdil_buyer_code, full_name')
+        .eq('active', true)).data
   for (const b of buyers || []) {
     if (normalizeBuyerCode(b.bc_buyer_code) === normInput) {
       return { jdil_code: b.jdil_buyer_code, full_name: b.full_name, matched: true, confidence: 100 }
@@ -102,9 +119,11 @@ async function lookupBuyerCode(bcBuyerCode, supabaseAdmin) {
   }
 
   // Alias fallback (normalized), resolving the canonical code to a JDIL code.
-  const { data: aliases } = await supabaseAdmin
-    .from('bc_buyer_aliases')
-    .select('alias, canonical_bc_code')
+  const aliases = (cache && Array.isArray(cache.aliases))
+    ? cache.aliases
+    : (await supabaseAdmin
+        .from('bc_buyer_aliases')
+        .select('alias, canonical_bc_code')).data
   for (const a of aliases || []) {
     if (normalizeBuyerCode(a.alias) === normInput) {
       const b = (buyers || []).find(x => x.bc_buyer_code === a.canonical_bc_code)
@@ -280,11 +299,31 @@ function processReceiptHeaders(receiptHeaders) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Mapping cache loader — load the 3 small mapping tables ONCE per sync run so the
+// per-PO lookups above read from memory instead of re-querying (and re-scanning)
+// the tables for every PO. Pass the returned object as the `cache` arg to
+// lookupRigName / lookupBuyerCode. Shape: { rigs:[], buyers:[], aliases:[] }.
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadMappingCaches(supabaseAdmin) {
+  const [rigs, buyers, aliases] = await Promise.all([
+    supabaseAdmin.from('bc_rig_mapping').select('*').eq('active', true),
+    supabaseAdmin.from('bc_buyer_mapping').select('*').eq('active', true),
+    supabaseAdmin.from('bc_buyer_aliases').select('*'),
+  ])
+  return {
+    rigs:    rigs.data    || [],
+    buyers:  buyers.data  || [],
+    aliases: aliases.data || [],
+  }
+}
+
 module.exports = {
   extractRigPrefix,
   lookupRigName,
   normalizeBuyerCode,
   lookupBuyerCode,
+  loadMappingCaches,
   transformBlanketOrder,
   transformLinkedOrder,
   mapPOStatus,
