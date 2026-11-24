@@ -212,6 +212,16 @@ app.listen(PORT, () => {
   console.log('[bc-safety] BC_SYNC_ENABLED:', process.env.BC_SYNC_ENABLED || 'not set (false)')
   console.log('[bc-safety] BC_CRON_ENABLE:', process.env.BC_CRON_ENABLE || 'not set (false)')
 
+  // ── Stale-run sweeper ───────────────────────────────────────────────────────
+  // Always on (even when cron scheduling is off): manual async syncs can also
+  // orphan a 'running' row if the server restarts mid-sync. Auto-marks them
+  // 'timeout' after 90 min so the UI never shows a sync stuck "running" forever.
+  try {
+    require('./utils/bcCronScheduler').startStaleSweeper()
+  } catch (e) {
+    console.error('[stale-sweep] failed to start:', e.message)
+  }
+
   // ── BC automated sync scheduler (9am + 6pm IST) ─────────────────────────────
   // Only register the schedule in production, or when explicitly enabled for
   // local testing via BC_CRON_ENABLE=true. Promotion to po_orders is separately

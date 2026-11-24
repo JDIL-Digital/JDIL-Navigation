@@ -268,4 +268,46 @@ async function getSchedulerStatus() {
   }
 }
 
-module.exports = { initializeScheduler, runFullSync, getSchedulerStatus, peekLock }
+// ── Stale-run sweeper (DB-backed; survives restarts) ────────────────────────────
+// The in-memory setTimeout in runFullSync and the _current/_busy flags are lost on
+// restart, so a sync interrupted by a crash/redeploy leaves its bc_sync_runs row
+// stuck at status='running' forever (nothing clears it until the next full sync is
+// triggered). This sweep marks any 'running' row older than STALE_RUN_MS as
+// 'timeout' — independent of any in-memory state. Runs on startup + every 15 min.
+// Threshold (90 min) sits safely above the 60-min full-run ceiling and any single
+// rig's real runtime, so it never cuts a genuinely in-flight background sync.
+const SWEEP_INTERVAL_MS = 15 * 60_000
+let _sweeper = null
+
+async function sweepStaleRuns() {
+  try {
+    const cutoffISO = new Date(Date.now() - STALE_RUN_MS).toISOString()
+    const { data, error } = await supabase
+      .from('bc_sync_runs')
+      .update({
+        status: 'timeout',
+        completed_at: new Date().toISOString(),
+        error_message: `Auto-marked timeout — stuck in 'running' for >${Math.round(STALE_RUN_MS / 60_000)} min (likely a server restart mid-sync).`,
+      })
+      .eq('status', 'running')
+      .lt('started_at', cutoffISO)
+      .select('id')
+    if (error) { console.error('[stale-sweep] failed:', error.message); return 0 }
+    const n = (data || []).length
+    if (n > 0) console.warn(`[stale-sweep] marked ${n} stale run(s) as timeout`)
+    return n
+  } catch (e) {
+    console.error('[stale-sweep] error:', e.message)
+    return 0
+  }
+}
+
+function startStaleSweeper() {
+  if (_sweeper) return
+  sweepStaleRuns()   // sweep once on startup
+  _sweeper = setInterval(sweepStaleRuns, SWEEP_INTERVAL_MS)
+  if (_sweeper.unref) _sweeper.unref()   // don't keep the process alive just for the sweep
+  console.log(`[stale-sweep] started (every ${Math.round(SWEEP_INTERVAL_MS / 60_000)} min, threshold ${Math.round(STALE_RUN_MS / 60_000)} min)`)
+}
+
+module.exports = { initializeScheduler, runFullSync, getSchedulerStatus, peekLock, startStaleSweeper, sweepStaleRuns }
