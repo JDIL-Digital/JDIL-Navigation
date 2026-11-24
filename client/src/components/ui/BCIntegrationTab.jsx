@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 
 // ── API helper (Express /api/admin/bc-mapping with JWT) ───────────────────────
@@ -1705,26 +1705,72 @@ function SyncToStagingCard({ onViewStaging }) {
   const [err, setErr]         = useState(null)
   const [runs, setRuns]       = useState([])
   const [historyOpen, setHistoryOpen] = useState(false)
+  const pollRef = useRef(null)   // setInterval handle for async-sync polling
 
   async function loadRuns() {
     try { setRuns(await biApi('/sync-runs')) } catch { /* non-critical */ }
   }
   useEffect(() => { loadRuns() }, [])
+  // Stop polling if the card unmounts mid-sync.
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  // Map a finished bc_sync_runs row to the result shape the success panel renders.
+  function resultFromRun(r) {
+    const staged = r.staging_rows_inserted ?? 0
+    const truncated = Array.isArray(r.truncation_warnings) && r.truncation_warnings.length > 0
+    return {
+      sync_run_id: r.id,
+      summary: {
+        total_bos_fetched:     r.total_bos_fetched ?? 0,
+        total_pos_processed:   r.total_pos_processed ?? 0,
+        pos_within_range:      r.pos_within_range ?? 0,
+        pos_before_cutoff:     r.pos_before_cutoff ?? 0,
+        staging_rows_inserted: staged,
+      },
+      pages_fetched:    null,        // not persisted on the run row
+      likely_truncated: truncated,
+      warnings_count:   0,           // warnings are visible per-row in Staging Rows
+      message: `${staged} PO${staged !== 1 ? 's' : ''} inserted into staging${truncated ? ' ⚠️ (safety cap hit — more may exist)' : ''}. Review and promote when ready.`,
+    }
+  }
 
   const loading = status === 'loading'
   const rigLabel = RIG_PREFIX_OPTIONS.find(o => o.value === prefix)?.label || 'All rigs'
 
   async function run() {
     if (!window.confirm('This will fetch BC data and insert rows into the bc_po_staging table. Continue?')) return
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
     setStatus('loading'); setResult(null); setErr(null)
+
+    // The endpoint is async: it returns 202 + sync_run_id immediately and stages
+    // in the background (avoids Replit's ~60s gateway 504). We then poll the run
+    // row every 5s until it leaves 'running'.
+    let runId
     try {
-      const json = await biApi(`/sync-to-staging?rig_prefix=${encodeURIComponent(prefix)}&fiscal_years=${encodeURIComponent(fiscalYears)}`, 'POST')
-      setResult(json); setStatus('success')
+      const started = await biApi(`/sync-to-staging?rig_prefix=${encodeURIComponent(prefix)}&fiscal_years=${encodeURIComponent(fiscalYears)}`, 'POST')
+      runId = started?.sync_run_id
       await loadRuns()
     } catch (e) {
       setErr({ error: e.message, hint: e.hint }); setStatus('error')
       await loadRuns()
+      return
     }
+    if (!runId) { setErr({ error: 'Sync did not return a run id — check server logs.' }); setStatus('error'); return }
+
+    pollRef.current = setInterval(async () => {
+      let r
+      try { r = await biApi(`/sync-runs/${runId}`) }
+      catch { return }   // transient poll error — keep polling
+      if (!r || r.status === 'running') return
+
+      clearInterval(pollRef.current); pollRef.current = null
+      await loadRuns()
+      if (r.status === 'success' || r.status === 'partial_failure') {
+        setResult(resultFromRun(r)); setStatus('success')
+      } else {
+        setErr({ error: r.error_message || `Sync ${r.status}`, hint: 'See Sync History for details.' }); setStatus('error')
+      }
+    }, 5000)
   }
 
   return (
@@ -1758,7 +1804,7 @@ function SyncToStagingCard({ onViewStaging }) {
         {loading && (
           <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
             <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-            Syncing to staging for {rigLabel}… (this can take 30–60s)
+            Syncing to staging for {rigLabel}… (runs in the background — this can take a few minutes for large rigs)
           </div>
         )}
 
