@@ -91,17 +91,18 @@ function normalizeBuyerCode(code) {
  * then the alias table. No fuzzy matching.
  * @param {string|null} bcBuyerCode
  * @param {import('@supabase/supabase-js').SupabaseClient} supabaseAdmin
- * Unmatched and empty buyers are auto-assigned to the ACCOUNTS team, so a PO
- * is never left without a buyer_code.
+ * Unmatched and empty buyers are LEFT UNASSIGNED (jdil_code = null) and flagged
+ * for manual review — they are NOT auto-assigned to the ACCOUNTS team. A blank
+ * buyer_code lets admins clearly see which POs still need a buyer.
  * @returns {Promise<object>} one of:
- *   { jdil_code:'ACCOUNTS', full_name:'Accounts (unassigned)', matched:false, is_empty:true, auto_assigned_to_accounts:true }
+ *   { jdil_code:null, full_name:null, matched:false, is_empty:true, needs_manual_review:true }
  *   { jdil_code, full_name, matched:true, confidence:100 }
  *   { jdil_code, full_name, matched:true, confidence:100, via_alias:true }
- *   { jdil_code:'ACCOUNTS', full_name:'Accounts (<bcValue>)', matched:false, auto_assigned_to_accounts:true, bc_value:<bcBuyerCode> }
+ *   { jdil_code:null, full_name:null, matched:false, needs_manual_review:true, bc_value:<bcBuyerCode> }
  */
 async function lookupBuyerCode(bcBuyerCode, supabaseAdmin, cache = null) {
   const normInput = normalizeBuyerCode(bcBuyerCode)
-  if (!normInput) return { jdil_code: 'ACCOUNTS', full_name: 'Accounts (unassigned)', matched: false, is_empty: true, auto_assigned_to_accounts: true }
+  if (!normInput) return { jdil_code: null, full_name: null, matched: false, is_empty: true, needs_manual_review: true }
 
   // Compare against all active buyer mappings on their normalized forms.
   // Source rows from the in-memory cache (loaded once per sync run) when
@@ -131,8 +132,9 @@ async function lookupBuyerCode(bcBuyerCode, supabaseAdmin, cache = null) {
     }
   }
 
-  // No match anywhere → auto-assign to the ACCOUNTS team (never leave null).
-  return { jdil_code: 'ACCOUNTS', full_name: `Accounts (${bcBuyerCode})`, matched: false, auto_assigned_to_accounts: true, bc_value: bcBuyerCode }
+  // No match anywhere → leave buyer unassigned (null) and flag for manual review.
+  // (An explicit ACCOUNTS mapping still matches above; only the fallback changed.)
+  return { jdil_code: null, full_name: null, matched: false, needs_manual_review: true, bc_value: bcBuyerCode }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1065,7 +1065,7 @@ function PreviewSyncCard() {
   const loading = status === 'loading'
   const p = result?.preview
   const rows = p ? p.blanket_orders.flatMap(bo => bo.pos_processed.map(po => ({ bo, po }))) : []
-  const autoAccountsCount = rows.filter(({ po }) => po.buyer_lookup?.auto_assigned_to_accounts).length
+  const needsReviewCount = rows.filter(({ po }) => po.buyer_lookup?.needs_manual_review).length
 
   return (
     <div className="card p-5">
@@ -1131,9 +1131,9 @@ function PreviewSyncCard() {
                 ⚠ Unknown rig prefix{p.unknown_rigs.length !== 1 ? 'es' : ''}: {p.unknown_rigs.join(', ')} — add a mapping in the Rig Mapping tab.
               </div>
             )}
-            {autoAccountsCount > 0 && (
-              <div className="bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 text-sm rounded-lg px-4 py-2.5">
-                {autoAccountsCount} PO{autoAccountsCount !== 1 ? 's' : ''} auto-assigned to Accounts team (unknown or empty BC buyer code).
+            {needsReviewCount > 0 && (
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-500 text-sm rounded-lg px-4 py-2.5">
+                {needsReviewCount} PO{needsReviewCount !== 1 ? 's' : ''} with no buyer assigned — needs manual review (unknown or empty BC buyer code).
               </div>
             )}
             {p.bos_within_sync_range === 0 && (
@@ -1175,7 +1175,7 @@ function PreviewSyncCard() {
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                     {rows.map(({ bo, po }, i) => {
                       const td = po.transformed_data
-                      const autoAccounts = po.buyer_lookup.auto_assigned_to_accounts === true
+                      const needsReview = po.buyer_lookup.needs_manual_review === true
                       const cell = 'table-cell text-xs'
                       const redCell = 'table-cell text-xs bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'
                       return (
@@ -1184,9 +1184,9 @@ function PreviewSyncCard() {
                           <td className={cell}>{td.mr_date || '—'}</td>
                           <td className={bo.rig_matched ? cell : redCell}>{bo.rig_matched ? (td.rig_name || '—') : `? ${bo.rig_prefix || ''}`}</td>
                           <td className={cell}>{td.vendor_name || '—'}</td>
-                          <td className={autoAccounts ? `${cell} text-gray-400 dark:text-gray-500` : cell}>
-                            {autoAccounts
-                              ? po.buyer_lookup.full_name
+                          <td className={needsReview ? `${cell} text-amber-600 dark:text-amber-500 italic` : cell}>
+                            {needsReview
+                              ? <>— needs review{po.buyer_lookup.bc_value ? <span className="text-gray-400"> ({po.buyer_lookup.bc_value})</span> : ' (empty)'}</>
                               : <>{td.buyer_code}{td.buyer_code_raw ? <span className="text-gray-400"> ({td.buyer_code_raw})</span> : ''}</>}
                           </td>
                           <td className={cell}>{td.po_status || '—'}</td>

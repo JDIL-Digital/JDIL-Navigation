@@ -139,8 +139,8 @@ async function stageRig({ rig_prefix, fiscal_years, runId, label }) {
 
       const warnings = []
       if (!bo.rig_matched) warnings.push(`unknown rig: ${bo.rig_prefix || '(none)'}`)
-      if (po.buyer_lookup?.auto_assigned_to_accounts) {
-        warnings.push(`buyer auto-assigned to ACCOUNTS${po.buyer_lookup.bc_value ? ` (${po.buyer_lookup.bc_value})` : ' (empty)'}`)
+      if (po.buyer_lookup?.needs_manual_review) {
+        warnings.push(`buyer not assigned - needs manual review${po.buyer_lookup.bc_value ? ` (${po.buyer_lookup.bc_value})` : ' (empty)'}`)
       }
       if (qtyPending) warnings.push('⚠️ GRN received - rig team needs to confirm quantities')
 

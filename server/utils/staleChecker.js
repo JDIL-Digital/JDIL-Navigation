@@ -226,10 +226,12 @@ async function checkStaleOrders() {
       cc.forEach(c => { if (c && c !== to) g.ccs.add(c) })
     }
 
-    // POs auto-assigned to ACCOUNTS (unknown/empty BC buyer) are routed silently:
-    // skip escalation entirely for them (no buyer/Pinto/Moorthy/rig-manager emails).
+    // POs with no assigned buyer are routed silently: skip escalation entirely
+    // for them (no buyer/Pinto/Moorthy/rig-manager emails). This covers both the
+    // legacy ACCOUNTS catchall and the new unassigned (null/blank buyer_code)
+    // behavior — admin assigns a buyer from the dashboard before they escalate.
     // Dashboard stale flags are still recomputed above — only the emails are suppressed.
-    const notAccounts = po => po.buyer_code !== 'ACCOUNTS'
+    const notAccounts = po => po.buyer_code !== 'ACCOUNTS' && po.buyer_code !== null && po.buyer_code !== ''
 
     const vendorItems = vendorStale.filter(notAccounts).map(po => {
       const d = daysSince(po.promised_ready_date)

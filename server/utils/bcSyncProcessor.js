@@ -130,9 +130,10 @@ async function processSingleBlanketOrder(bcBO, supabaseAdmin, cache = null) {
         buyers_matched++
       } else {
         buyers_unmatched++
-        // Silent mode: unknown/empty buyers are auto-assigned to ACCOUNTS, so we
-        // no longer write Data Quality Alerts from preview. (Helpers kept below
-        // in case we want to re-enable alerting later.)
+        // Unknown/empty buyers are left unassigned (buyer_code = null) and
+        // flagged for manual review via processed_warnings — we no longer write
+        // Data Quality Alerts from preview. (Helpers kept below in case we want
+        // to re-enable alerting later.)
         // if (buyer_lookup.is_empty) await logEmptyBuyer(po.documentNo, supabaseAdmin)
         // else await logUnknownBuyer(buyer_lookup.bc_value ?? po.BuyerCode, po.documentNo, supabaseAdmin)
       }
