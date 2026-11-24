@@ -2030,6 +2030,7 @@ function StagingRowsSub({ initialRunId = '' }) {
   const [promoteResult, setPromoteResult] = useState(null)
   const [promoteErr, setPromoteErr]       = useState('')
   const [syncEnabled, setSyncEnabled]     = useState(null)   // null = unknown until /env-status loads
+  const promotePollRef = useRef(null)   // setInterval handle for async promote polling
 
   async function loadRuns() {
     try { setRuns(await biApi('/sync-runs')) } catch { /* non-critical */ }
@@ -2048,6 +2049,7 @@ function StagingRowsSub({ initialRunId = '' }) {
   }
   useEffect(() => { loadRuns(); loadEnv() }, [])            // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadRows(); setPlan(null); setPlanErr('') }, [runFilter, statusFilter])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { if (promotePollRef.current) clearInterval(promotePollRef.current) }, [])  // stop polling on unmount
 
   async function analyze() {
     if (!runFilter) return
@@ -2070,14 +2072,43 @@ function StagingRowsSub({ initialRunId = '' }) {
       ? `Dry run: analyze promoting ${n} POs. No data will be written. Continue?`
       : `You are about to promote ${n} POs to the production po_orders table. This action is IRREVERSIBLE (except via Supabase backup restore). Continue?`
     if (!window.confirm(msg)) return
+    if (promotePollRef.current) { clearInterval(promotePollRef.current); promotePollRef.current = null }
     setPromoting(true); setPromoteErr(''); setPromoteResult(null)
+    const bs = batchSize === 'all' ? 1000 : batchSize
+
+    // Dry run is read-only and fast → stays synchronous.
+    if (dryRun) {
+      try {
+        const res = await biApi(`/promote-to-po-orders?sync_run_id=${encodeURIComponent(runFilter)}&batch_size=${bs}&dry_run=true`, 'POST')
+        setPromoteResult(res)
+        await loadRows()
+      } catch (e) { setPromoteErr(e.message) }
+      setPromoting(false)
+      return
+    }
+
+    // Real promote is async: 202 + promote_id, then poll the run row every 5s
+    // (avoids Replit's ~60s gateway 504 on large batches). The full promote
+    // result is stored in the run row's rig_results.
+    let promoteId
     try {
-      const bs = batchSize === 'all' ? 1000 : batchSize
-      const res = await biApi(`/promote-to-po-orders?sync_run_id=${encodeURIComponent(runFilter)}&batch_size=${bs}&dry_run=${dryRun}`, 'POST')
-      setPromoteResult(res)
+      const started = await biApi(`/promote-to-po-orders?sync_run_id=${encodeURIComponent(runFilter)}&batch_size=${bs}&dry_run=false`, 'POST')
+      promoteId = started?.promote_id
+    } catch (e) { setPromoteErr(e.message); setPromoting(false); return }
+    if (!promoteId) { setPromoteErr('Promote did not return an id — check server logs.'); setPromoting(false); return }
+
+    promotePollRef.current = setInterval(async () => {
+      let r
+      try { r = await biApi(`/sync-runs/${promoteId}`) }
+      catch { return }   // transient poll error — keep polling
+      if (!r || r.status === 'running') return
+
+      clearInterval(promotePollRef.current); promotePollRef.current = null
+      setPromoting(false)
       await loadRows()
-    } catch (e) { setPromoteErr(e.message) }
-    setPromoting(false)
+      if (r.rig_results) setPromoteResult(r.rig_results)
+      if (r.status === 'failed') setPromoteErr(r.error_message || 'Promote failed — see Sync History.')
+    }, 5000)
   }
 
   return (

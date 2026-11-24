@@ -419,14 +419,59 @@ router.post('/promote-to-po-orders', async (req, res) => {
     })
   }
 
-  try {
-    // Shared promote logic (also used by the cron scheduler when BC_SYNC_ENABLED=true).
-    const result = await promoteRun({ sync_run_id, batch_size, dry_run, createdBy: req.user.id })
-    res.json(result)
-  } catch (e) {
-    console.error('[bc-promote] FAILED:', e.message)
-    res.status(500).json({ success: false, error: e.message, hint: 'Ensure v27 columns exist on po_orders and staging tables are populated.' })
+  // Dry run is read-only and fast → stays synchronous (returns the analysis now).
+  if (dry_run) {
+    try {
+      const result = await promoteRun({ sync_run_id, batch_size, dry_run: true, createdBy: req.user.id })
+      return res.json(result)
+    } catch (e) {
+      console.error('[bc-promote] dry-run FAILED:', e.message)
+      return res.status(500).json({ success: false, error: e.message, hint: 'Ensure v27 columns exist on po_orders and staging tables are populated.' })
+    }
   }
+
+  // Real promote can take minutes for large batches → Replit's ~60s gateway
+  // returns HTTP 504 while the work keeps running server-side. Same async pattern
+  // as /sync-to-staging: track the promote in a bc_sync_runs row, return 202
+  // immediately, run promoteRun in the background, and let the client poll
+  // GET /sync-runs/:id (the full promote result is stored in rig_results).
+  const { data: track, error: trackErr } = await supabase
+    .from('bc_sync_runs')
+    .insert({ triggered_by: req.user.id, trigger_source: 'manual-promote', rig_filter: sync_run_id, status: 'running' })
+    .select().single()
+  if (trackErr) return res.status(500).json({ success: false, error: `Could not create promote run: ${trackErr.message}` })
+  const promoteId = track.id
+  const started = Date.now()
+
+  promoteRun({ sync_run_id, batch_size, dry_run: false, createdBy: req.user.id })
+    .then(async (result) => {
+      const processing_time_ms = Date.now() - started
+      await supabase.from('bc_sync_runs').update({
+        status: (result.pos_failed > 0) ? 'partial_failure' : 'success',
+        completed_at: new Date().toISOString(),
+        pos_promoted: result.pos_promoted ?? 0,
+        rig_results: result,   // full promote result for the client to render
+        error_message: result.pos_failed > 0 ? `${result.pos_failed} promotion(s) failed` : null,
+        processing_time_ms,
+      }).eq('id', promoteId)
+      console.log(`[bc-promote] run ${promoteId} done — ${result.pos_promoted} promoted, ${result.pos_failed} failed in ${(processing_time_ms / 1000).toFixed(0)}s`)
+    })
+    .catch(async (e) => {
+      console.error(`[bc-promote] run ${promoteId} FAILED:`, e.message)
+      await supabase.from('bc_sync_runs').update({
+        status: 'failed', completed_at: new Date().toISOString(),
+        error_message: e.message, processing_time_ms: Date.now() - started,
+      }).eq('id', promoteId)
+    })
+    .catch(err => console.error(`[bc-promote] run ${promoteId} post-processing error:`, err?.message))
+
+  res.status(202).json({
+    accepted: true,
+    promote_id: promoteId,
+    sync_run_id,
+    status: 'queued',
+    message: `Promote started for run ${sync_run_id}. Poll /sync-runs/${promoteId} for progress.`,
+  })
 })
 
 // ─── GET /api/admin/bc-integration/staging-line-items/:bc_staging_id ──────────
