@@ -25,11 +25,15 @@ const { stageRig, promoteRun } = require('./bcSyncService')
 const RIG_PREFIXES = ['RD1', 'RD1DD', 'RV1', 'RV1DD', 'RJS', 'RJSDD', 'RJE', 'RJEDD', 'RJSUP', 'RJSUPDD', 'MLU', 'DDD', 'TAWS', 'RIG', 'RGEN']
 const FISCAL_YEARS = ['2627', '2728']         // current + next
 const RIG_DELAY_MS = 30_000                     // be gentle on BC between rigs
-const STALE_RUN_MS = 90 * 60_000                // a 'running' row older than this is treated as stale (kept well above the timeout)
+const PER_RIG_TIMEOUT_MS = 10 * 60_000          // per-rig ceiling — a hung BC call can't stall the whole run (enforced via Promise.race)
+const STALE_RUN_MS = 210 * 60_000               // a 'running' row older than this is treated as stale (safety net above the whole-run ceiling)
 const PROMOTE_BATCH = 1000                      // promote all eligible INSERTs per rig run
-const SYNC_TIMEOUT_MS = 60 * 60_000             // whole-run ceiling — stop between rigs if exceeded
+const SYNC_TIMEOUT_MS = 180 * 60_000            // whole-run ceiling — stop between rigs if exceeded (15 rigs × 10-min cap + 30s delays ≈ 157 min worst case)
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+// Human-readable duration, e.g. "3m 45s".
+const fmtDur = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}m ${s % 60}s` }
 
 let _task = null                                // node-cron task handle (null until initialized)
 let _scheduled = false
@@ -112,7 +116,7 @@ async function runFullSync(triggeredBy = 'cron', userId = null) {
     for (const r of allRunning) {
       await supabase.from('bc_sync_runs').update({
         status: 'stale', completed_at: new Date().toISOString(),
-        error_message: 'Marked stale — running >90 min with no completion',
+        error_message: `Marked stale — running >${Math.round(STALE_RUN_MS / 60_000)} min with no completion`,
       }).eq('id', r.id)
       console.warn(`[cron-sync] marked stale run ${r.id} (crashed/abandoned)`)
     }
@@ -159,11 +163,26 @@ async function runFullSync(triggeredBy = 'cron', userId = null) {
       const rig = RIG_PREFIXES[i]
       _current.rig_index = i + 1
       _current.current_rig = rig
-      console.log(`[cron-sync] run ${runId}: starting rig ${i + 1} of ${RIG_PREFIXES.length}: ${rig}`)
+      const rigStart = Date.now()
+      console.log(`[cron-sync] run ${runId}: starting rig ${i + 1} of ${RIG_PREFIXES.length}: ${rig} at ${new Date().toISOString()}`)
 
       const rigResult = { rig, status: 'success', staging_rows: 0, pos_promoted: 0, error: null }
+      let rigTimer = null
       try {
-        const s = await stageRig({ rig_prefix: rig, fiscal_years: FISCAL_YEARS, runId, label: `run ${runId} ${rig}` })
+        // Per-rig timeout: a hung BC fetch inside stageRig() can't be caught by the
+        // between-rig whole-run check (we'd never return to it), so bound each rig
+        // with Promise.race. On timeout we mark THIS rig failed and continue to the
+        // next — one stalled rig can no longer hang the entire run for 90+ min.
+        const rigTimeout = new Promise((_, reject) => {
+          rigTimer = setTimeout(
+            () => reject(new Error(`Rig timeout — exceeded ${Math.round(PER_RIG_TIMEOUT_MS / 60_000)} min`)),
+            PER_RIG_TIMEOUT_MS
+          )
+        })
+        const s = await Promise.race([
+          stageRig({ rig_prefix: rig, fiscal_years: FISCAL_YEARS, runId, label: `run ${runId} ${rig}` }),
+          rigTimeout,
+        ])
         totalBos += s.total_bos; totalPos += s.total_pos; within += s.within; before += s.before; stagingRows += s.staging_rows
         rigResult.staging_rows = s.staging_rows
         if (s.likely_truncated) { rigResult.likely_truncated = true; rigResult.bo_count = s.bo_count; truncationWarnings.push(rig) }
@@ -178,15 +197,18 @@ async function runFullSync(triggeredBy = 'cron', userId = null) {
           posPromoted += p.pos_promoted
           if (p.pos_failed > 0) { rigResult.status = 'partial'; rigResult.error = `${p.pos_failed} promotion(s) failed` }
         }
-        console.log(`[cron-sync] run ${runId}: rig ${rig} done — ${s.staging_rows} staged, ${rigResult.promote_skipped ? 'promote skipped (gate off)' : `${rigResult.pos_promoted} promoted`}`)
+        console.log(`[cron-sync] run ${runId}: rig ${rig} done — ${s.staging_rows} staged, ${rigResult.promote_skipped ? 'promote skipped (gate off)' : `${rigResult.pos_promoted} promoted`} (completed in ${fmtDur(Date.now() - rigStart)})`)
       } catch (e) {
         rigsFailed++
         rigResult.status = 'failed'
         rigResult.error = e.message
         if (!firstError) firstError = `${rig}: ${e.message}`
-        console.error(`[cron-sync] run ${runId}: rig ${rig} FAILED — ${e.message}`)
+        console.error(`[cron-sync] run ${runId}: rig ${rig} FAILED after ${fmtDur(Date.now() - rigStart)} — ${e.message}`)
+      } finally {
+        clearTimeout(rigTimer)   // null-safe; stop the per-rig timer whichever way we exit
       }
 
+      rigResult.duration_ms = Date.now() - rigStart
       perRig.push(rigResult)
       _current.per_rig = perRig
 
